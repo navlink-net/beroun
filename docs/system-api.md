@@ -79,7 +79,7 @@ One clipboard (plain text, up to 1 MB) for the whole device: every app, system v
 JavaScript: `Platform.clipboard.read({host: true})`, `.write(text)`, `.clear()`. A page of an app or a system view only (the same rule as the rest of this API).
 
 On the device the user works with it in a text field: SELECT turns the selection mode on and off, the arrows move the end of the selection, A opens the menu Copy / Cut / Paste / Select All, B leaves it (`web-shell/osk.js`).
-The assistant has `beroun_clipboard_read` and `beroun_clipboard_write`. On a simulator the console page (`web-shell/console.html`) keeps the device and host clipboards equal: over `/ws` shelld sends `{"t":"clip","text"}` (device -> host) and
+The assistant has `beroun_clipboard_read` and `beroun_clipboard_write`. On a simulator the console page (an extension of the simulator target, `BEROUN_EXTENSIONS`) keeps the device and host clipboards equal: over `/ws` shelld sends `{"t":"clip","text"}` (device -> host) and
 `{"t":"clip?"}` (asks for the host's text), the console answers `{"t":"clip","text"}` (`null` when the browser refused). Test: `tests/clipboard_test.py`.
 
 ## The external screen (HDMI)

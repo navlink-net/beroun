@@ -1,9 +1,9 @@
 <!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
 # OS Beroun: technical documentation
 
-**OS Beroun** is an operating environment for small handheld-style devices: an HTML-based launcher and apps, a shell daemon that owns the
-system API, a service manager, an app store with signed packages, and a built-in privileged assistant, **Caroline**. It is a product of its own
-and nothing in this documentation depends on a particular piece of hardware. Web version: https://caroline.partners.solutions/beroun/index.html
+**OS Beroun** is a Linux-based operating system built around an **AI Engine**, which manages the system: an HTML-based launcher and apps, a shell
+daemon that owns the system API, a service manager, an app store with signed packages, and **Caroline**, built in as a privileged part of the system.
+Nothing in this documentation depends on a particular piece of hardware. Web version: https://caroline.partners.solutions/beroun/index.html
 
 ## Targets (where OS Beroun runs)
 
@@ -29,6 +29,12 @@ What a target must supply is in [TARGETS.md](TARGETS.md).
 
 Field-level references: [app-format.md](app-format.md) (the manifest), [system-api.md](system-api.md) (the system API),
 [assistant-contract.md](assistant-contract.md) (the assistant slot).
+
+## Tests and target scripts
+
+The documents name the tests that check a feature (`tests/...`) and the scripts that provision a device's runtimes (`scripts/caroline-provision.sh`,
+`caroline-build.sh`, `claude-provision.sh`, `codex-provision.sh`). They belong to the reference target, which runs the OS on a simulator, and are not
+part of this repository; the names say which check covers what.
 
 ## Code layout
 

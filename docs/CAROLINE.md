@@ -1,7 +1,7 @@
 # Caroline inside OS Beroun
 
 Caroline (the owner's assistant; her own repository has its own documentation) is **part of the system, not an app**. She is pinned as the submodule `caroline` and treated as upstream: nothing is
-patched in her checkout from here. Measurements and compatibility notes: `docs/caroline-compatibility.md`, `caroline-memory.md`, `caroline-updates.md`.
+patched in her checkout from here.
 
 ## Two ways in
 

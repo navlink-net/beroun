@@ -1,8 +1,8 @@
 # Beroun
 
-**Beroun (OS Beroun)** is a Linux-based operating system built around an AI assistant. The assistant is the system's manager: it handles
-applications, services, network, memory, power and updates. The owner sets the rules and can see everything the assistant does, or do the
-same by hand. Beroun is aimed at developers building AI-native devices.
+**Beroun (OS Beroun)** is a Linux-based operating system built around an AI Engine. The AI Engine manages the system: applications,
+services, network, memory, power and updates. The owner sets the rules and can see everything the AI Engine does, or do the same by
+hand. Beroun is aimed at developers building AI-native devices.
 
 Technical base: Linux, Wayland (Weston), WPE WebKit, A2A-ready agents, ARM64.
 
@@ -17,7 +17,7 @@ Documentation on the web: **https://caroline.partners.solutions/beroun/index.htm
 | Network | Wi-Fi as a system service: profiles, access points, network time, system notifications. |
 | Agent | Agents declared in the manifest, tasks with a life cycle, a bridge to A2A. |
 | Storage | The owner's home directory on the memory card; app state and system data kept separate. |
-| System API | Message boxes, sounds, vibration, notifications and the clock, for apps and the assistant. |
+| System API | Message boxes, sounds, vibration, notifications and the clock, for apps and the AI Engine. |
 
 On top of these sit a system dispatcher, power and memory services, a task broker, and an app store with signed packages.
 

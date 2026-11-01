@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>External screen: input test</title>
+<!-- A page for the big window that reports what it hears (tests/extinput_test.py): keys, the mouse, the wheel, the on-screen keyboard. Shown with POST /api/hdmi {"show": "/examples/ext-input-test.html"}. -->
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #123; color: #fff; font: 28px sans-serif; }
+  #log { padding: 24px; white-space: pre; }
+  input { position: fixed; left: 0; bottom: 0; width: 420px; height: 80px; box-sizing: border-box; font-size: 28px; padding: 8px; }   /* in the bottom left corner: the pointer is easy to put there */
+</style>
+<div id="log">input test</div>
+<input id="in" placeholder="type here" autocomplete="off">
+<script src="/platform.js"></script>
+<script>
+  const out = [];
+  const say = m => { out.push(m); document.getElementById('log').textContent = out.slice(-12).join('\n'); fetch('/api/log', {method: 'POST', body: JSON.stringify({msg: 'ext-test ' + m})}).catch(() => {}); };
+  let lastMove = 0;
+  addEventListener('keydown', e => say('key ' + e.key));
+  addEventListener('keyup', e => say('keyup ' + e.key));
+  // the pointer of the big screen is hidden when it has not moved for a while (web-shell/focusframe.js)
+  let hid = false;
+  setInterval(() => { const h = document.documentElement.classList.contains('__nocursor'); if (h !== hid) { hid = h; say(h ? 'cursor hidden' : 'cursor shown'); } }, 200);
+  addEventListener('mousemove', e => { const n = Date.now(); if (n - lastMove > 150) { lastMove = n; say('move ' + e.clientX + ' ' + e.clientY); } });
+  addEventListener('mousedown', e => say('down ' + e.button));
+  addEventListener('mouseup', e => say('up ' + e.button));
+  addEventListener('wheel', e => say('wheel ' + Math.sign(e.deltaX) + ' ' + Math.sign(e.deltaY)), {passive: true});
+  addEventListener('osk', e => say('osk ' + ((e.detail && e.detail.height) || 0)));
+  addEventListener('resize', () => say('size ' + innerWidth + ' ' + innerHeight));
+  document.getElementById('in').addEventListener('focus', () => say('focus input'));
+  document.getElementById('in').addEventListener('blur', () => say('blur input'));
+  document.getElementById('in').addEventListener('input', e => say('value ' + e.target.value));
+  say('ready ' + innerWidth + ' ' + innerHeight);
+</script>

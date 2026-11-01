@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Minecraft probe (test)</title>
+<!-- what the shared window's WPE offers a cloud game. Results go to the shell's log as "page: probe ...". Hidden. -->
+<script src="/platform.js"></script>
+<body style="font:16px monospace;background:#111;color:#ddd"><pre id="o"></pre>
+<script>
+const o = document.getElementById('o');
+const log = m => { o.textContent += m + '\n'; fetch('/api/log', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({msg: 'probe ' + m})}); };
+Platform.state.get().then(() => {});
+Platform.onClose(() => Platform.state.set({}));
+log('ua=' + navigator.userAgent);
+log('size=' + innerWidth + 'x' + innerHeight + ' dpr=' + devicePixelRatio + ' coarse=' + matchMedia('(pointer: coarse)').matches + ' touch=' + ('ontouchstart' in window));
+log('RTCPeerConnection=' + typeof window.RTCPeerConnection + ' getGamepads=' + typeof navigator.getGamepads + ' pointerLock=' + typeof document.body.requestPointerLock);
+(async () => {
+  try {
+    const pc = new RTCPeerConnection({iceServers: []});
+    pc.addTransceiver('video', {direction: 'recvonly'});
+    pc.addTransceiver('audio', {direction: 'recvonly'});
+    const off = await pc.createOffer();
+    const codecs = (off.sdp.match(/a=rtpmap:\d+ [^\r\n]+/g) || []).map(s => s.split(' ')[1]);
+    log('offer ok codecs=' + [...new Set(codecs)].join(','));
+    pc.createDataChannel('x'); log('datachannel ok');
+  } catch (e) { log('webrtc error ' + e); }
+  try { const a = new Audio(); a.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; await a.play(); log('autoplay audible ok'); } catch (e) { log('autoplay audible blocked ' + e.name); }
+  let n = 0; const t = setInterval(() => {
+    const ps = [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter(Boolean);
+    log('pads=' + ps.map(p => p.id + ' axes=' + p.axes.length + ' btn=' + p.buttons.length + ' pressed=' + p.buttons.map((b, i) => b.pressed ? i : -1).filter(i => i >= 0).join('/') + ' ax=' + p.axes.map(v => v.toFixed(2)).join('/')).join(' | '));
+    if (++n >= 15) clearInterval(t);
+  }, 2000);
+})();
+</script>

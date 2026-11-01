@@ -1,0 +1,10 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Native Hello</title>
+<style>body{margin:0;background:#101820;color:#fff;font:20px monospace;display:flex;align-items:center;justify-content:center;height:100vh}</style></head>
+<body><div id="out">...</div>
+<script>
+fetch("/api/app/nativehello/hello").then(r => r.json()).then(j => { document.getElementById("out").textContent = j.hello + " (" + j.target + ")"; })
+  .catch(e => { document.getElementById("out").textContent = "no answer: " + e; });
+</script></body></html>

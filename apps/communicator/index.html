@@ -1,0 +1,607 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Communicator</title>
+<meta name="viewport" content="width=640,height=480">
+<style>
+  :root { --bg:#111; --panel:#1b1f24; --line:#262b31; --text:#fff; --dim:#9aa3ad; --accent:#f2a900; --in:#2a2f36; --err:#ff6b6b;
+          --mail:#9b6bff; --whatsapp:#25d366; --telegram:#2aabee; --signal:#3a76f0; --slack:#e8317a; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; width:100%; height:100%; overflow:hidden; background:var(--bg); color:var(--text); font-family:"DejaVu Sans",sans-serif; -webkit-user-select:none; user-select:none; }
+  body { display:flex; flex-direction:column; }
+  .screen { display:none; flex:1; min-height:0; flex-direction:column; }
+  .screen.on { display:flex; }
+  /* header */
+  .head { flex:none; height:40px; padding:0 8px 0 14px; background:#000; display:flex; align-items:center; gap:10px; }
+  .head h1 { margin:0; flex:1; font-size:20px; color:var(--accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .head .tot { background:var(--accent); color:#000; border-radius:11px; min-width:22px; padding:0 7px; font-size:14px; font-weight:bold; line-height:22px; text-align:center; }
+  .btn { flex:none; height:30px; line-height:30px; padding:0 12px; border-radius:6px; background:#2d3640; color:#fff; font-size:15px; cursor:pointer; white-space:nowrap; }
+  .btn.sel, .chip.sel { outline:3px solid #fff; outline-offset:-3px; }
+  .btn.on { background:var(--accent); color:#000; }
+  /* filter chips */
+  #chips { flex:none; display:flex; gap:6px; padding:6px 8px; background:var(--panel); overflow:hidden; }
+  .chip { flex:none; height:28px; line-height:28px; padding:0 11px; border-radius:14px; background:#2d3640; font-size:14px; cursor:pointer; display:flex; align-items:center; gap:6px; }
+  .chip.on { background:var(--accent); color:#000; font-weight:bold; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--c, #888); flex:none; }
+  /* conversation list (windowed: only the visible rows exist) */
+  #list { flex:1; min-height:0; overflow:auto; position:relative; touch-action:none; }
+  #spacer { position:relative; width:100%; }
+  .row { position:absolute; left:0; right:0; height:60px; padding:0 12px; display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .row.sel { background:var(--accent); color:#000; }
+  .av { flex:none; position:relative; width:42px; height:42px; border-radius:50%; background:#3a424b; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:bold; color:#fff; }
+  .row.sel .av { background:#00000033; }
+  .av .bd { position:absolute; right:-3px; bottom:-3px; width:16px; height:16px; border-radius:50%; background:var(--c); border:2px solid var(--bg); }
+  .row.sel .av .bd { border-color:var(--accent); }
+  .mid { flex:1; min-width:0; }
+  .t1 { display:flex; gap:8px; align-items:baseline; }
+  .t1 b { flex:1; font-size:18px; font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .t1 time { flex:none; font-size:12px; color:var(--dim); }
+  .row.sel .t1 time, .row.sel .t2 { color:#000a; }
+  .t2 { font-size:14px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:3px; }
+  .unread { flex:none; background:var(--accent); color:#000; border-radius:11px; min-width:22px; padding:0 6px; font-size:13px; font-weight:bold; line-height:22px; text-align:center; }
+  .row.sel .unread { background:#000; color:var(--accent); }
+  .empty { padding:30px 20px; color:var(--dim); font-size:17px; text-align:center; }
+  /* conversation */
+  #msgs { flex:1; min-height:0; overflow:auto; padding:8px 10px; touch-action:none; display:flex; flex-direction:column; gap:4px; }
+  .m { max-width:82%; padding:7px 11px; border-radius:14px; background:var(--in); font-size:17px; line-height:1.3; white-space:pre-wrap; overflow-wrap:anywhere; align-self:flex-start; }
+  .m.out { align-self:flex-end; background:var(--accent); color:#000; }
+  .m .who { font-size:12px; font-weight:bold; color:var(--c); margin-bottom:2px; }
+  .m .meta { font-size:11px; opacity:.65; text-align:right; margin-top:2px; }
+  .m .meta.failed { color:var(--err); opacity:1; font-weight:bold; }
+  .m.out .meta.failed { color:#900; }
+  .subj { align-self:center; font-size:13px; color:var(--dim); margin:6px 0 2px; max-width:90%; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .more { color:var(--dim); font-size:13px; cursor:pointer; text-decoration:underline; }
+  .day { align-self:center; font-size:12px; color:var(--dim); margin:6px 0; }
+  .older { align-self:center; }
+  #composer { flex:none; display:flex; gap:6px; align-items:center; padding:6px 8px; background:var(--panel); }
+  #subjchip { flex:none; max-width:150px; height:36px; line-height:36px; padding:0 10px; border-radius:6px; background:#2d3640; font-size:13px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:none; }
+  #text { flex:1; min-width:0; height:40px; border:0; border-radius:8px; padding:0 12px; font:18px "DejaVu Sans",sans-serif; background:#fff; color:#000; outline:0; }
+  #text:focus { outline:3px solid var(--accent); }
+  #send { flex:none; height:40px; line-height:40px; padding:0 16px; border-radius:8px; background:var(--accent); color:#000; font-weight:bold; font-size:16px; cursor:pointer; border:3px solid var(--c, var(--accent)); }
+  #send.off { opacity:.4; }
+  #note { flex:none; min-height:22px; padding:2px 12px; font-size:14px; color:var(--err); background:var(--panel); }
+  #note:empty { display:none; }
+  /* accounts */
+  #accs { flex:1; min-height:0; overflow:auto; touch-action:none; }
+  .sec { padding:6px 14px; font-size:13px; color:var(--dim); background:var(--panel); text-transform:uppercase; letter-spacing:1px; }
+  .arow { height:54px; padding:0 12px; display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .arow.sel { background:var(--accent); color:#000; }
+  .arow .nm { flex:1; font-size:19px; }
+  .arow .st { font-size:14px; color:var(--dim); max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .arow.sel .st { color:#000a; }
+  .arow .st.bad { color:var(--err); }
+  .arow .act { flex:none; height:30px; line-height:30px; padding:0 12px; border-radius:6px; background:#2d3640; color:#fff; font-size:14px; }
+  .arow.sel .act { background:#000; color:var(--accent); }
+  /* dialogue */
+  #dlg { position:fixed; inset:0; background:#161a1e; display:none; flex-direction:column; padding:14px 18px; gap:10px; z-index:10; }
+  #dlg.on { display:flex; }
+  #dlg h2 { margin:0; font-size:22px; color:var(--accent); }
+  #dp { font-size:16px; color:var(--dim); min-height:22px; }
+  #df { display:flex; flex-direction:column; gap:8px; overflow:auto; }
+  #df input { height:44px; border:0; border-radius:8px; padding:0 12px; font:19px "DejaVu Sans",sans-serif; background:#fff; color:#000; outline:0; }
+  #df input:focus { outline:3px solid var(--accent); }
+  #df label { font-size:14px; color:var(--dim); }
+  #dbtn { display:flex; gap:8px; margin-top:auto; }
+  #dbtn .btn { height:42px; line-height:42px; flex:1; text-align:center; font-size:18px; }
+  /* attachments, mute, search, the keyboard */
+  .att { display:flex; align-items:center; gap:8px; margin:3px 0; padding:6px 9px; border-radius:8px; background:#00000026; font-size:15px; cursor:pointer; }
+  .m.out .att { background:#00000022; }
+  .att .ai { flex:none; width:22px; height:22px; border-radius:4px; background:var(--c); color:#fff; font-size:12px; font-weight:bold; line-height:22px; text-align:center; }
+  .att .an { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .att .as { flex:none; font-size:12px; opacity:.7; }
+  #attach { flex:none; height:40px; line-height:40px; padding:0 12px; border-radius:8px; background:#2d3640; color:#fff; font-size:15px; cursor:pointer; }
+  #attach.off { display:none; }
+  #attchip { flex:none; max-width:130px; height:36px; line-height:36px; padding:0 10px; border-radius:6px; background:var(--accent); color:#000; font-size:13px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:none; }
+  .unread.muted { background:#555; color:#ddd; }
+  .row.sel .unread.muted { background:#000; color:#aaa; }
+  .mutemark { flex:none; font-size:11px; color:var(--dim); border:1px solid var(--dim); border-radius:4px; padding:0 4px; line-height:15px; }
+  .row.sel .mutemark { color:#000a; border-color:#000a; }
+  #sq { flex:1; min-width:0; height:30px; border:0; border-radius:6px; padding:0 10px; font:17px "DejaVu Sans",sans-serif; background:#fff; color:#000; outline:0; }
+  #sq:focus { outline:3px solid var(--accent); }
+  #res { flex:1; min-height:0; overflow:auto; touch-action:none; }
+  .hit { padding:8px 14px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .hit.sel { background:var(--accent); color:#000; }
+  .hit .h1 { display:flex; gap:8px; font-size:15px; font-weight:bold; }
+  .hit .h1 span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .hit .h1 time { flex:none; font-size:12px; font-weight:normal; opacity:.65; }
+  .hit .h2 { font-size:14px; opacity:.8; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* with the on-screen keyboard open the dialogue gets all the room it can: no title bar, no filter bar */
+  body.kb #s-chat .head, body.kb #chips { display:none; }
+  body.kb #msgs { padding-top:4px; }
+  #hint { flex:none; height:24px; line-height:24px; padding:0 12px; font-size:12px; color:#6b7580; background:#000; white-space:nowrap; overflow:hidden; }
+</style>
+
+<div id="s-list" class="screen on">
+  <div class="head"><h1 id="ltitle">Communicator</h1><span class="tot" id="ltot" style="display:none"></span><span class="btn" role="button" id="bsearch" title="Search">Search</span><span class="btn" role="button" id="brole" title="Whose accounts: mine or Caroline's">Me</span><span class="btn" role="button" id="bacc" title="Accounts (SELECT)">Accounts</span></div>
+  <div id="chips"></div>
+  <div id="list"><div id="spacer"></div></div>
+  <div id="hint">&uarr;&darr; select &nbsp; A open &nbsp; &larr;&rarr; filter &nbsp; B accounts</div>
+</div>
+
+<div id="s-search" class="screen">
+  <div class="head"><span class="btn" role="button" id="sback">&larr;</span><input id="sq" autocomplete="off" placeholder="Search all messages"></div>
+  <div id="res"></div>
+  <div id="hint3" style="flex:none;height:24px;line-height:24px;padding:0 12px;font-size:12px;color:#6b7580;background:#000">A open &nbsp; &uarr;&darr; select &nbsp; Search runs on this device's store, all five services &nbsp; B back</div>
+</div>
+
+<div id="s-chat" class="screen">
+  <div class="head"><span class="btn" role="button" id="bback">&larr;</span><h1 id="ctitle"></h1><span class="btn" role="button" id="bmute" title="Mute / unmute this conversation">Mute</span><span class="btn" role="button" id="cbadge" style="background:var(--c);color:#fff"></span></div>
+  <div id="msgs"></div>
+  <div id="note"></div>
+  <div id="composer"><span id="subjchip"></span><span id="attach">File</span><span id="attchip"></span><input id="text" autocomplete="off" placeholder="Message"><span id="send">Send</span></div>
+</div>
+
+<div id="s-acc" class="screen">
+  <div class="head"><span class="btn" role="button" id="aback">&larr;</span><h1>Accounts</h1></div>
+  <div id="accs"></div>
+  <div id="hint2" style="flex:none;height:24px;line-height:24px;padding:0 12px;font-size:12px;color:#6b7580;background:#000">The same accounts Caroline uses. Add, edit or delete them in Settings &rsaquo; Accounts. &uarr;&darr; select &nbsp; A open Settings &nbsp; B back</div>
+</div>
+
+<div id="dlg">
+  <h2 id="dt"></h2>
+  <div id="dp"></div>
+  <div id="df"></div>
+  <div id="dbtn"><span class="btn" role="button" id="dcancel">Cancel</span><span class="btn on" id="dok">OK</span></div>
+</div>
+
+<script src="/platform.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const SERVICES = {mail: 'Mail', whatsapp: 'WhatsApp', telegram: 'Telegram', signal: 'Signal', slack: 'Slack'};
+const LETTER = {mail: 'M', whatsapp: 'W', telegram: 'T', signal: 'S', slack: '#'};
+const ROW = 60, POLL_S = 25;
+
+// the role "self" is the assistant of this build: its name (Caroline's by default; Claude's or Codex's in their builds), for the labels of its accounts
+let ASSISTANT = 'Caroline';
+fetch('/api/assistant/providers').then(r => r.json()).then(j => {
+  const p = (j.providers || []).find(x => x.active);
+  if (!p || p.id === 'caroline') return;
+  ASSISTANT = p.name;
+  $('#brole').title = Platform.t("Whose accounts: mine or " + ASSISTANT + "'s");
+  $('#hint2').innerHTML = Platform.t('The same accounts ' + ASSISTANT + ' uses.') + ' ' + Platform.t('Add, edit or delete them in Settings › Accounts.') + ' &uarr;&darr; select &nbsp; A open Settings &nbsp; B back';
+  if (S.screen === 'list') $('#brole').textContent = Platform.t(S.role === 'owner' ? 'Me' : ASSISTANT);
+}).catch(() => {});
+const S = {screen: 'list', accounts: [], convs: [], filter: 'all', role: 'owner', sel: 0, seq: null, chat: null, msgs: [], older: true,
+           accSel: 0, unread: 0, loading: false};
+
+async function api(path, opts) {
+  const r = await fetch('/api/msg/' + path, opts), j = await r.json().catch(() => ({error: 'bad answer'}));
+  if (!r.ok) { const e = new Error(j.error || r.statusText); e.code = j.code; e.status = r.status; throw e; }
+  return j;
+}
+const post = (path, body) => api(path, {method: 'POST', body: JSON.stringify(body || {})});
+const q = o => Object.entries(o).filter(([, v]) => v !== '' && v != null).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+const color = svc => `var(--${svc})`;
+const initials = t => (t.replace(/[^\p{L}\p{N} ]/gu, '').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('') || '?').toUpperCase();
+
+function fmtTime(ts) {
+  const d = new Date(ts * 1000), n = new Date();
+  if (d.toDateString() === n.toDateString()) return d.toTimeString().slice(0, 5);
+  if (n - d < 6 * 864e5) return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+  return `${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// ---- screens -----------------------------------------------------------------------------------------
+function show(name) {
+  S.screen = name;
+  for (const id of ['list', 'chat', 'acc', 'search']) $('#s-' + id).classList.toggle('on', id === name);
+  if (name === 'chat') setTimeout(() => $('#msgs').scrollTop = 1e9, 0);
+}
+
+// ---- the list ----------------------------------------------------------------------------------------
+function chips() {
+  const el = $('#chips'); el.innerHTML = '';
+  const list = [['all', 'All', null], ...Object.entries(SERVICES).map(([k, v]) => [k, v, k])];
+  list.forEach(([key, label, svc]) => {
+    const d = document.createElement('div');
+    d.className = 'chip' + (S.filter === key ? ' on' : ''); d.setAttribute('role', 'button');
+    d.innerHTML = (svc ? `<i class="dot" style="--c:${color(svc)}"></i>` : '') + label;
+    d.onclick = () => { S.filter = key; S.sel = 0; loadList(); };
+    el.appendChild(d);
+  });
+}
+
+async function loadList() {
+  chips();
+  $('#brole').textContent = Platform.t(S.role === 'owner' ? 'Me' : ASSISTANT);
+  $('#brole').classList.toggle('on', S.role === 'self');
+  const r = await api('conversations?' + q({role: S.role, service: S.filter === 'all' ? '' : S.filter, limit: 1000}));
+  S.convs = r.conversations;
+  S.sel = Math.min(S.sel, Math.max(0, S.convs.length - 1));
+  drawList();
+  refreshTotal();
+}
+
+async function refreshTotal() {
+  try { const a = await api('accounts'); S.accounts = a.accounts; S.unread = a.unread; } catch (e) { return; }
+  const t = $('#ltot'); t.style.display = S.unread ? '' : 'none'; t.textContent = S.unread > 99 ? '99+' : S.unread;
+}
+
+function drawList() {
+  const box = $('#list'), sp = $('#spacer');
+  sp.style.height = Math.max(S.convs.length * ROW, 0) + 'px';
+  if (!S.convs.length) {
+    sp.style.height = 'auto'; sp.innerHTML = '<div class="empty">' + (S.accounts.some(a => a.role === S.role && a.state === 'linked')
+      ? 'No conversations here yet.' : 'No account is linked. Add one in Settings > Accounts (B, then A).') + '</div>';
+    return;
+  }
+  const top = box.scrollTop, h = box.clientHeight || 400;
+  const a = Math.max(0, Math.floor(top / ROW) - 4), b = Math.min(S.convs.length, Math.ceil((top + h) / ROW) + 4);
+  sp.innerHTML = '';
+  for (let i = a; i < b; i++) {
+    const c = S.convs[i], d = document.createElement('div');
+    d.className = 'row' + (i === S.sel ? ' sel' : ''); d.style.top = i * ROW + 'px';
+    d.innerHTML = `<div class="av">${initials(c.title)}<i class="bd" style="--c:${color(c.service)}"></i></div>` +
+      `<div class="mid"><div class="t1"><b></b><time>${c.last_ts ? fmtTime(c.last_ts) : ''}</time></div><div class="t2"></div></div>` +
+      (c.muted ? '<span class="mutemark">muted</span>' : '') +
+      (c.unread ? `<span class="unread${c.muted ? ' muted' : ''}">${c.unread > 99 ? '99+' : c.unread}</span>` : '');
+    d.querySelector('b').textContent = c.title; d.querySelector('.t2').textContent = c.last_text;
+    d.onclick = () => { S.sel = i; openChat(c); }; d.setAttribute('role', 'button');
+    sp.appendChild(d);
+  }
+}
+function selectRow(n) {
+  if (!S.convs.length) return;
+  S.sel = Math.max(0, Math.min(S.convs.length - 1, n));
+  const box = $('#list'), y = S.sel * ROW;
+  if (y < box.scrollTop) box.scrollTop = y; else if (y + ROW > box.scrollTop + box.clientHeight) box.scrollTop = y + ROW - box.clientHeight;
+  drawList();
+}
+$('#list').addEventListener('scroll', drawList);
+
+// drag to scroll (touch arrives as pointer events); a press that did not move is a tap
+function dragScroll(box) {
+  let d = null, dragged = false;
+  box.addEventListener('pointerdown', e => { d = {y: e.clientY, st: box.scrollTop}; dragged = false; });
+  box.addEventListener('pointermove', e => { if (!d) return; const dy = e.clientY - d.y; if (!dragged && Math.abs(dy) > 8) { dragged = true; box.setPointerCapture(e.pointerId); } if (dragged) box.scrollTop = d.st - dy; });
+  const end = () => { d = null; };
+  box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+  box.addEventListener('click', e => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+}
+['#list', '#msgs', '#accs'].forEach(s => dragScroll($(s)));
+
+// ---- a conversation ----------------------------------------------------------------------------------
+const QUOTE_AT = /\n\s*(On .{5,80} wrote:|-- \n|>)/;
+function bodyNode(text, mail) {
+  const wrap = document.createElement('span');
+  const m = mail ? QUOTE_AT.exec(text) : null;
+  if (!m) { wrap.textContent = text; return wrap; }
+  const head = document.createElement('span'), more = document.createElement('div');
+  head.textContent = text.slice(0, m.index); more.className = 'more'; more.textContent = '...';
+  const full = document.createElement('span'); full.style.display = 'none'; full.textContent = text.slice(m.index);
+  more.onclick = () => { full.style.display = ''; more.remove(); };
+  wrap.append(head, more, full);
+  return wrap;
+}
+
+function fmtSize(n) { n = Number(n) || 0; return !n ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB'; }
+
+// an attachment is fetched into Downloads on the card (once; a second tap fetches a second copy, never overwriting) and opened by the app
+// that takes its type, when there is one
+async function openAttachment(m, index) {
+  $('#note').style.color = 'var(--dim)'; $('#note').textContent = 'Downloading...';
+  try {
+    const r = await post('download', {conv: S.chat.id, id: m.id, index});
+    let how = 'Saved: ' + r.path;
+    try { await Platform.files.open(r.path); how = 'Saved and opened: ' + r.path; } catch (e) { /* no app for this type */ }
+    $('#note').textContent = how;
+  } catch (e) { $('#note').style.color = 'var(--err)'; $('#note').textContent = e.message; }
+}
+
+function tick(m) {
+  if (!m.outgoing) return '';
+  return {queued: '...', sent: '✓', delivered: '✓✓', read: '✓✓', failed: 'not sent'}[m.state] || '';
+}
+
+function drawMsgs(keepBottom = true) {
+  const box = $('#msgs'), c = S.chat, mail = c.service === 'mail';
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.innerHTML = '';
+  if (S.older) { const o = document.createElement('div'); o.className = 'btn older'; o.textContent = 'Older messages'; o.onclick = loadOlder; box.appendChild(o); }
+  let prevSubj = '', prevDay = '';
+  for (const m of S.msgs) {
+    const day = new Date(m.ts * 1000).toDateString();
+    if (day !== prevDay) { prevDay = day; const d = document.createElement('div'); d.className = 'day'; d.textContent = new Date(m.ts * 1000).toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'}); box.appendChild(d); }
+    if (mail && m.subject && m.subject !== prevSubj) { prevSubj = m.subject; const s = document.createElement('div'); s.className = 'subj'; s.textContent = m.subject; box.appendChild(s); }
+    const d = document.createElement('div');
+    d.className = 'm' + (m.outgoing ? ' out' : ''); d.style.setProperty('--c', color(c.service));
+    if (!m.outgoing && c.kind !== 'dm' && m.sender_name) { const w = document.createElement('div'); w.className = 'who'; w.textContent = m.sender_name; d.appendChild(w); }
+    (m.attachments || []).forEach((a, ai) => {
+      const at = document.createElement('div'); at.className = 'att';
+      at.innerHTML = `<span class="ai">${{photo: 'P', video: 'V', audio: 'A', voice: 'A'}[a.kind] || 'F'}</span><span class="an"></span><span class="as"></span>`;
+      at.querySelector('.an').textContent = a.name || a.kind || 'file'; at.querySelector('.as').textContent = fmtSize(a.size);
+      at.onclick = () => openAttachment(m, ai); at.setAttribute('role', 'button');
+      d.appendChild(at);
+    });
+    if (m.text || !(m.attachments || []).length) d.appendChild(bodyNode(m.text, mail));
+    const meta = document.createElement('div'); meta.className = 'meta' + (m.state === 'failed' ? ' failed' : '');
+    meta.textContent = new Date(m.ts * 1000).toTimeString().slice(0, 5) + (m.outgoing ? '  ' + tick(m) : '');
+    d.appendChild(meta);
+    box.appendChild(d);
+  }
+  if (keepBottom && atBottom) box.scrollTop = 1e9;
+}
+
+async function openChat(c, focus) {
+  S.chat = c; S.msgs = []; S.older = true; $('#note').textContent = '';
+  $('#ctitle').textContent = c.title;
+  const bd = $('#cbadge'); bd.textContent = SERVICES[c.service]; bd.style.setProperty('--c', color(c.service));
+  $('#send').style.setProperty('--c', color(c.service));
+  const mail = c.service === 'mail', chip = $('#subjchip'); chip.style.display = mail ? 'block' : 'none';
+  S.subject = null; setAttachment(null);
+  const acct = S.accounts.find(a => a.id === c.account);
+  $('#attach').classList.toggle('off', !(acct && acct.capabilities && acct.capabilities.files));   // no pretending: no button where the service cannot take files
+  show('chat');
+  const r = await api('messages?' + q({conv: c.id, limit: 40}));
+  S.chat = r.conversation; S.msgs = r.messages; S.older = r.has_more;
+  muteButton();
+  $('#text').value = r.draft || ''; updateSend();
+  subjectChip();
+  drawMsgs(); $('#msgs').scrollTop = 1e9;
+  await markRead();
+  if (focus) $('#text').focus();
+}
+async function loadOlder() {
+  const first = S.msgs[0]; if (!first) return;
+  const r = await api('messages?' + q({conv: S.chat.id, limit: 40, before: first.id}));
+  S.msgs = r.messages.concat(S.msgs); S.older = r.has_more && r.messages.length > 0;
+  const box = $('#msgs'), h = box.scrollHeight; drawMsgs(false); box.scrollTop = box.scrollHeight - h;
+}
+async function markRead() {
+  if (!S.chat || !S.chat.unread && !S.msgs.some(m => !m.outgoing && !m.read)) { if (S.chat) S.chat.unread = 0; }
+  try { await post('read', {conv: S.chat.id}); } catch (e) {}
+  const row = S.convs.find(c => c.id === S.chat.id); if (row) row.unread = 0;
+  refreshTotal();
+}
+
+function lastSubject() { const m = [...S.msgs].reverse().find(x => x.subject); return m ? m.subject : ''; }
+function subjectChip() {
+  if (!S.chat || S.chat.service !== 'mail') return;
+  const base = lastSubject();
+  const subj = S.subject != null ? S.subject : (base ? (/^re:/i.test(base) ? base : 'Re: ' + base) : '');
+  $('#subjchip').textContent = subj ? subj : 'Subject';
+}
+// a small modal (the page cannot use alert/confirm/prompt in WPE): fields = [{name, label, value, secret}] -> the values, or null when cancelled
+function dialog({title, text, fields = [], ok = 'OK', cancel = 'Cancel'}) {
+  return new Promise(resolve => {
+    const box = $('#dlg'), df = $('#df'); df.innerHTML = '';
+    $('#dt').textContent = title; $('#dp').textContent = text || '';
+    for (const f of fields) { const l = document.createElement('label'); l.textContent = f.label; const i = document.createElement('input'); i.name = f.name; i.type = f.secret ? 'password' : 'text'; i.value = f.value || ''; i.autocomplete = 'off'; df.append(l, i); }
+    $('#dok').textContent = ok; $('#dcancel').textContent = cancel; $('#dcancel').style.display = cancel ? '' : 'none';
+    const done = v => { box.classList.remove('on'); S.dlg = null; resolve(v); };
+    S.dlg = () => done(null);
+    $('#dok').onclick = () => { const v = {}; df.querySelectorAll('input').forEach(i => v[i.name] = i.value); done(v); };
+    $('#dcancel').onclick = () => done(null);
+    df.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); $('#dok').click(); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(null); } };
+    box.classList.add('on');
+    const first = df.querySelector('input'); if (first) setTimeout(() => { first.focus(); first.select(); }, 50);
+  });
+}
+$('#subjchip').onclick = async () => {
+  const base = lastSubject(), cur = S.subject != null ? S.subject : (base ? (/^re:/i.test(base) ? base : 'Re: ' + base) : '');
+  const v = await dialog({title: 'Subject', text: 'The subject of the mail you are writing.', fields: [{name: 'subject', label: 'Subject', value: cur}]});
+  if (v) { S.subject = v.subject; subjectChip(); }
+};
+
+// a file to send: picked on the card; the text typed beside it becomes its caption
+function setAttachment(path) {
+  S.attach = path; const c = $('#attchip');
+  c.style.display = path ? 'block' : 'none'; c.textContent = path ? path.split('/').pop() + '  x' : '';
+  updateSend();
+}
+$('#attach').onclick = async () => {
+  let r = null; try { r = await Platform.pickFile({}); } catch (e) {}
+  if (r && r.path) setAttachment(r.path);
+};
+$('#attchip').onclick = () => setAttachment(null);
+
+function muteButton() { const b = $('#bmute'); b.textContent = S.chat && S.chat.muted ? 'Unmute' : 'Mute'; b.classList.toggle('on', !!(S.chat && S.chat.muted)); }
+async function toggleMute(c) {
+  if (!c) return;
+  try { const r = await post('mute', {conv: c.id, muted: !c.muted}); c.muted = r.muted; } catch (e) { return; }
+  const row = S.convs.find(x => x.id === c.id); if (row) row.muted = c.muted;
+  if (S.chat && S.chat.id === c.id) { S.chat.muted = c.muted; muteButton(); }
+  drawList(); refreshTotal();
+}
+$('#bmute').onclick = () => toggleMute(S.chat);
+
+function updateSend() { $('#send').classList.toggle('off', !$('#text').value.trim() && !S.attach); }
+let draftTimer = null;
+$('#text').addEventListener('input', () => {
+  updateSend(); clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => S.chat && api('draft', {method: 'PUT', body: JSON.stringify({conv: S.chat.id, text: $('#text').value})}).catch(() => {}), 600);
+});
+async function send() {
+  const t = $('#text').value.trim(), file = S.attach; if ((!t && !file) || !S.chat) return;
+  $('#note').style.color = 'var(--err)'; $('#note').textContent = '';
+  let subject = null;
+  if (S.chat.service === 'mail') { const base = lastSubject(); subject = S.subject != null ? S.subject : (base ? (/^re:/i.test(base) ? base : 'Re: ' + base) : ''); }
+  $('#text').value = ''; setAttachment(null);
+  try { await post('send', {conv: S.chat.id, text: t, subject, files: file ? [file] : []}); }
+  catch (e) { $('#note').textContent = e.message; if (!$('#text').value) { $('#text').value = t; } if (file) setAttachment(file); updateSend(); }
+  await reloadChat();
+}
+$('#send').onclick = send;
+$('#text').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); send(); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); $('#text').blur(); } });
+async function reloadChat() {
+  if (!S.chat) return;
+  const keep = Math.max(S.msgs.length, 40);
+  const r = await api('messages?' + q({conv: S.chat.id, limit: Math.min(keep, 200)}));
+  S.msgs = r.messages; S.chat = r.conversation; drawMsgs();
+}
+$('#bback').onclick = leaveChat;
+function leaveChat() {
+  S.chat = null; $('#text').blur();
+  if (S.fromSearch) { S.fromSearch = false; show('search'); drawHits(); return; }    // back to the results it came from
+  show('list'); loadList();
+}
+
+// ---- accounts and the link flow ----------------------------------------------------------------------
+function drawAccounts() {
+  const box = $('#accs'); box.innerHTML = '';
+  let n = 0; S.accRows = [];
+  for (const role of ['owner', 'self']) {
+    const s = document.createElement('div'); s.className = 'sec'; s.textContent = Platform.t(role === 'owner' ? 'My accounts' : ASSISTANT + "'s own accounts"); box.appendChild(s);
+    for (const a of S.accounts.filter(x => x.role === role && (x.state !== 'not-linked' || x.slot === 1))) {
+      const i = n++; S.accRows.push(a);
+      const d = document.createElement('div'); d.className = 'arow' + (i === S.accSel ? ' sel' : '');
+      const bad = a.state === 'needs-attention' || a.state === 'unavailable';
+      const label = {linked: a.detail || 'linked', connecting: 'linking...', 'needs-attention': 'needs attention', 'not-linked': 'not linked', unavailable: 'not available yet'}[a.state] || a.state;
+      const act = a.state === 'unavailable' ? '' : 'Settings';
+      d.innerHTML = `<i class="dot" style="--c:${color(a.service)};width:14px;height:14px"></i><span class="nm">${a.label}${a.slot > 1 ? ' #' + a.slot : ''}</span><span class="st ${bad ? 'bad' : ''}"></span>${act ? `<span class="act">${act}</span>` : ''}`;
+      d.querySelector('.st').textContent = label;
+      d.onclick = () => { S.accSel = i; accountAction(a); }; d.setAttribute('role', 'button');
+      box.appendChild(d);
+    }
+  }
+  const cur = box.querySelectorAll('.arow')[S.accSel]; if (cur) cur.scrollIntoView({block: 'nearest'});
+}
+async function openAccounts() { show('acc'); await refreshTotal(); drawAccounts(); }
+$('#aback').onclick = () => { show('list'); loadList(); };
+$('#bacc').onclick = openAccounts;
+
+// Accounts are added, edited and deleted in Settings > Accounts (one place for the owner and for Caroline); here they are only listed.
+async function accountAction(a) {
+  try { await fetch('/api/launch', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: 'settings', arg: {screen: 'accounts'}})}); } catch (e) {}
+}
+
+// ---- search: one box over all five services (the store on this device) ------------------------------------
+function openSearch() { show('search'); S.hits = S.hits || []; S.hitSel = 0; drawHits(); setTimeout(() => $('#sq').focus(), 50); }
+function drawHits() {
+  const box = $('#res'); box.innerHTML = '';
+  if (!S.hits.length) { box.innerHTML = '<div class="empty">' + ($('#sq').value.trim() ? 'Nothing found.' : 'Type to search the messages of all your accounts.') + '</div>'; return; }
+  S.hits.forEach((h, i) => {
+    const d = document.createElement('div'); d.className = 'hit' + (i === S.hitSel ? ' sel' : '');
+    d.innerHTML = `<div class="h1"><i class="dot" style="--c:${color(h.service)}"></i><span></span><time>${fmtTime(h.ts)}</time></div><div class="h2"></div>`;
+    d.querySelector('span').textContent = h.conv_title; d.querySelector('.h2').textContent = (h.outgoing ? 'You: ' : h.sender_name ? h.sender_name + ': ' : '') + (h.text || h.subject || '').replace(/\s+/g, ' ');
+    d.onclick = () => { S.hitSel = i; openHit(h); }; d.setAttribute('role', 'button');
+    box.appendChild(d);
+  });
+  const cur = box.children[S.hitSel]; if (cur && cur.scrollIntoView) cur.scrollIntoView({block: 'nearest'});
+}
+let searchTimer = null;
+$('#sq').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(async () => {
+    const t = $('#sq').value.trim();
+    if (!t) { S.hits = []; return drawHits(); }
+    try { S.hits = (await api('search?' + q({q: t, role: 'owner', limit: 50}))).results; } catch (e) { S.hits = []; }
+    S.hitSel = 0; drawHits();
+  }, 250);
+});
+$('#sq').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); $('#sq').blur(); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if ($('#sq').value) $('#sq').blur(); else { $('#sq').blur(); show('list'); loadList(); } }
+});
+function openHit(h) { S.fromSearch = true; openChat({id: h.conv, title: h.conv_title, service: h.service, kind: 'dm', account: h.account, muted: false}); }
+$('#bsearch').onclick = openSearch;
+$('#sback').onclick = () => { $('#sq').blur(); show('list'); loadList(); };
+dragScroll($('#res'));
+
+// ---- live changes ------------------------------------------------------------------------------------
+async function poll() {
+  for (;;) {
+    try {
+      if (S.seq == null) { const h = await api('health'); S.seq = h.seq; }
+      const r = await api(`changes?since=${S.seq}&wait=${POLL_S}`);
+      S.seq = r.seq;
+      if (r.events.length) onEvents(r.events);
+    } catch (e) { await new Promise(res => setTimeout(res, 2000)); }
+  }
+}
+function onEvents(evs) {
+  let list = false, chat = false, accs = false;
+  for (const e of evs) {
+    const d = e.data;
+    // a `read` event only changes counters: it must not redraw the open dialogue (marking it read raises one, which redrew, which marked it
+    // read again: the bubbles were rebuilt all the time, and a tap between the press and the release was lost)
+    if (e.kind === 'message' || e.kind === 'conversation' || e.kind === 'read' || e.kind === 'conversations') { list = true; if (S.chat && d.conv === S.chat.id && e.kind !== 'read') chat = true; }
+    if (e.kind === 'message-state' && S.chat && d.conv === S.chat.id) chat = true;
+    if (e.kind === 'account') accs = true;
+    // (the notification of a new message is raised by the shell itself, shelld's messaging watcher: with or without this app open)
+  }
+  if (S.screen === 'list' && list) loadList();
+  else if (list) refreshTotal();
+  if (S.screen === 'chat' && chat) { reloadChat().then(markRead); }
+  if (accs) { refreshTotal().then(() => { if (S.screen === 'acc') drawAccounts(); }); }
+}
+
+// ---- keys (the console's buttons arrive as keyboard events) -------------------------------------------
+addEventListener('keydown', e => {
+  const k = e.key, inField = e.target && /^(INPUT|TEXTAREA)$/.test(e.target.tagName);
+  if (S.dlg) return;
+  if (inField) return;
+  const stop = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+  if (S.screen === 'list') {
+    if (k === 'ArrowDown') { stop(); selectRow(S.sel + 1); }
+    else if (k === 'ArrowUp') { stop(); selectRow(S.sel - 1); }
+    else if (k === 'ArrowRight' || k === 'ArrowLeft') {
+      stop(); const keys = ['all', ...Object.keys(SERVICES)]; const i = keys.indexOf(S.filter);
+      S.filter = keys[(i + (k === 'ArrowRight' ? 1 : keys.length - 1)) % keys.length]; S.sel = 0; $('#list').scrollTop = 0; loadList();
+    }
+    else if (k === 'Enter') { stop(); if (S.convs[S.sel]) openChat(S.convs[S.sel]); }
+    else if (k === 'Escape') { stop(); openAccounts(); }               // B: the accounts (MODE leaves the app, as in every app)
+  } else if (S.screen === 'search') {
+    if (k === 'Escape') { stop(); show('list'); loadList(); }
+    else if (k === 'ArrowDown') { stop(); S.hitSel = Math.min(S.hits.length - 1, S.hitSel + 1); drawHits(); }
+    else if (k === 'ArrowUp') { stop(); S.hitSel = Math.max(0, S.hitSel - 1); drawHits(); }
+    else if (k === 'Enter') { stop(); if (S.hits[S.hitSel]) openHit(S.hits[S.hitSel]); else $('#sq').focus(); }
+  } else if (S.screen === 'chat') {
+    if (k === 'Escape') { stop(); leaveChat(); }
+    else if (k === 'Enter') { stop(); $('#text').focus(); }
+    else if (k === 'ArrowUp') { stop(); $('#msgs').scrollTop -= 80; }
+    else if (k === 'ArrowDown') { stop(); $('#msgs').scrollTop += 80; }
+    else if (k === 'ArrowLeft' || k === 'ArrowRight') { stop(); const b = $('#msgs'); b.scrollTop += (k === 'ArrowRight' ? 1 : -1) * (b.clientHeight - 40); }   // a page (the common rule, usage.md)
+  } else if (S.screen === 'acc') {
+    if (k === 'Escape') { stop(); show('list'); loadList(); }
+    else if (k === 'ArrowDown') { stop(); S.accSel = Math.min(S.accRows.length - 1, S.accSel + 1); drawAccounts(); }
+    else if (k === 'ArrowUp') { stop(); S.accSel = Math.max(0, S.accSel - 1); drawAccounts(); }
+    else if (k === 'Enter') { stop(); const a = S.accRows[S.accSel]; if (a) accountAction(a); }
+  }
+}, true);
+// the on-screen keyboard is open: the dialogue gets the room (no title bar, no filter bar)
+addEventListener('osk', e => document.body.classList.toggle('kb', !!(e.detail && e.detail.height)));
+$('#brole').onclick = () => { S.role = S.role === 'owner' ? 'self' : 'owner'; S.sel = 0; $('#list').scrollTop = 0; loadList(); };
+
+// closing: the draft of the open dialogue is saved, and so is the place (the list: filter, role, row; or the dialogue), which the app comes back to
+// when it is opened again (it shares its window with the other apps)
+Platform.onClose(async () => {
+  if (S.chat && $('#text').value) { try { await api('draft', {method: 'PUT', body: JSON.stringify({conv: S.chat.id, text: $('#text').value})}); } catch (e) {} }
+  try { await Platform.state.set({filter: S.filter, role: S.role, sel: S.sel, chat: S.screen === 'chat' && S.chat ? S.chat.id : null}); } catch (e) {}
+});
+
+(async () => {
+  const st = await Platform.state.get().catch(() => null);
+  if (st) {
+    if (typeof st.filter === 'string') S.filter = st.filter;
+    if (st.role === 'owner' || st.role === 'self') S.role = st.role;
+    if (Number.isInteger(st.sel) && st.sel >= 0) S.sel = st.sel;
+  }
+  try { await refreshTotal(); } catch (e) {}
+  await loadList().catch(e => { $('#spacer').innerHTML = '<div class="empty">The messaging backend is not running (' + e.message + ').</div>'; });
+  if (st && st.chat) { const c = S.convs.find(x => x.id === st.chat); if (c) openChat(c); }
+  poll();
+})();
+
+// Caroline's tools for this page (manifest: "caroline"): what the window shows, and showing a list or a conversation
+// (reading and sending messages is done with her messages_* and send tools, which use the same store)
+Platform.tools.handle('current_view', async () => S.screen === 'chat' && S.chat
+  ? 'Open conversation: "' + S.chat.title + '" (' + S.chat.service + ', account ' + S.chat.account + ')'
+  : 'Screen: ' + S.screen + '; the list of ' + (S.role === 'owner' ? "the owner's" : ASSISTANT + "'s") + ' conversations, filter ' + S.filter + ', ' + S.convs.length + ' shown');
+Platform.tools.handle('show_chat', async a => {
+  const want = String(a.chat || '').toLowerCase();
+  if (!S.convs.length || S.filter !== 'all') { S.filter = 'all'; await loadList(); }
+  const c = S.convs.find(x => x.id === a.chat) || S.convs.find(x => String(x.title || '').toLowerCase().includes(want));
+  if (!c) throw new Error('no conversation matching "' + a.chat + '" in this list (' + S.role + ')');
+  await openChat(c);
+  return 'Showing "' + c.title + '" (' + c.service + ')';
+});
+Platform.tools.handle('show_list', async a => {
+  const service = String(a.service || 'all');
+  if (service !== 'all' && !SERVICES[service]) throw new Error('service is one of: all, ' + Object.keys(SERVICES).join(', '));
+  S.filter = service; S.role = a.role === 'self' ? 'self' : 'owner'; S.sel = 0;
+  show('list'); await loadList();
+  return 'Showing the list of ' + (S.role === 'owner' ? "the owner's" : ASSISTANT + "'s") + ' conversations, filter ' + service + ': ' + S.convs.length;
+});
+
+</script>

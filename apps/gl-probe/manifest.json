@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "id": "gl-probe",
+  "name": "WebGL probe",
+  "version": "0.0.1",
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "capabilities": [{"name": "WebGL", "scope": {"required": true}}],
+  "tile": {"hidden": true}
+}

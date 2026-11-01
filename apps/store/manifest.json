@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "id": "store",
+  "name": "Store",
+  "version": "1.0.0",
+  "system": true,
+  "permissions": ["apps.manage"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "capabilities": [{"name": "Network", "scope": {"required": true}}],
+  "tile": {"order": 30},
+  "caroline": {
+    "description": "The store of OS Beroun: find, install, update and remove apps (the apps of apps.navlink.net)",
+    "skills": ["skills"],
+    "tools": [
+      {"name": "status", "description": "What the store shows: the filter, how many apps it lists, how many have an update, whether it is offline", "input": {}},
+      {"name": "show", "description": "Shows the card of an app on the screen (by its id from the catalog), with what it asks for", "input": {"app": "string"}}
+    ]
+  }
+}

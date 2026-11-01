@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "id": "codex",
+  "name": "Codex",
+  "module": "codex",
+  "service": "codex-backend",
+  "views": {
+    "chat": "assistant-chat",
+    "voice": "assistant-voice",
+    "wizard": "assistant-wizard",
+    "settings": "assistant-wizard"
+  },
+  "capabilities": [
+    "ask",
+    "chat",
+    "voice",
+    "wizard"
+  ],
+  "tools": "mcp",
+  "files": [
+    "runtime/assistant_common.py",
+    "runtime/codex_assistant.py",
+    "runtime/codex_backend.py",
+    "runtime/qr.py",
+    "scripts/codex-provision.sh",
+    "tests/codex_backend_test.py"
+  ]
+}

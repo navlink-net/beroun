@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Monitor</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- The simulator's external screen (HDMI): the picture of the second Weston (/ext.mjpg). The window can be stretched: its size is the mode of the screen
+     (POST /api/hdmi), so the apps on the big screen get the new size. It closes itself when the cable is pulled out. It is also the screen's own mouse and keyboard (what a USB mouse
+     and keyboard on a real monitor would be): the pointer over the picture, the buttons, the wheel and the keys go to the big screen (POST /api/hdmi/input). docs/system-api.md -->
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: #8a949e; font: 20px "Segoe UI", sans-serif; -webkit-user-select: none; user-select: none; }
+  #s { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; display: block; object-fit: fill; background: #0a0f14; }
+  #off { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: #000; }
+  #off.on { display: flex; }
+</style>
+<img id="s" alt="">
+<div id="off">No signal</div>
+<script>
+  const $ = s => document.querySelector(s);
+  let st = null, fitting = false, timer = null, shown = false, fixed = false;   // fixed: a window the page cannot size (a tab, a phone): the picture keeps its shape, with bars
+  const post = body => fetch('/api/hdmi', {method: 'POST', headers: {'X-IntelliCat-Service': '1'}, body: JSON.stringify(body)}).then(r => r.json());
+
+  // the window is as big as the screen: the first time the page knows the mode it sizes the window so that its inner size is the mode
+  function fit(w, h) {
+    if (fixed) return;
+    fitting = true;
+    window.resizeTo(w + (outerWidth - innerWidth), h + (outerHeight - innerHeight));
+    setTimeout(() => {
+      fitting = false;
+      if (st && st.connected && (st.width !== (innerWidth & ~1) || st.height !== (innerHeight & ~1))) { fixed = true; $('#s').style.objectFit = 'contain'; }
+    }, 700);
+  }
+
+  // the picture: a new stream when the old one broke (a proxy that dropped it, a computer that slept) and when the window is seen again
+  const stream = () => { if (shown) $('#s').src = '/ext.mjpg?' + Date.now(); };
+  $('#s').addEventListener('error', () => { if (shown) setTimeout(stream, 1000); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) stream(); });
+
+  async function poll() {
+    try {
+      const r = await fetch('/api/display', {cache: 'no-store'});
+      if (r.status === 410) { const j = await r.json().catch(() => ({})); return location.replace('/__ic/farewell?why=' + (j.why === 'too long' ? 'long' : 'idle')); }   // hosted: the session is over
+      st = await r.json();
+    } catch (e) { st = null; }
+    const on = !!(st && st.connected);
+    $('#off').classList.toggle('on', !on);
+    if (on && !shown) { shown = true; stream(); fit(st.width, st.height); }
+    if (!on && shown) { shown = false; $('#s').removeAttribute('src'); window.close(); }   // the cable is out: the window goes (when the browser does not allow it, "No signal" stays)
+    if (on && !fitting && (st.width !== (innerWidth & ~1) || st.height !== (innerHeight & ~1)) && !timer) fit(st.width, st.height);   // a mode set from outside (a test, the API): the window follows
+  }
+
+  // stretched by the user: the new size is the mode, after the stretching has settled
+  addEventListener('resize', () => {
+    if (fitting || fixed || !st || !st.connected) return;   // (a tab the user makes bigger does not change the screen's mode)
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      timer = null;
+      try { await post({width: innerWidth & ~1, height: innerHeight & ~1}); } catch (e) {}
+    }, 350);
+  });
+
+  // the screen's own mouse and keyboard: the window is as big as the screen, so a place in it is a place on the screen
+  const input = body => fetch('/api/hdmi/input', {method: 'POST', headers: {'X-IntelliCat-Service': '1'}, body: JSON.stringify(body), keepalive: true}).catch(() => {});
+  let lastMove = 0, pending = null;
+  const at = e => {   // (with bars: the place in the picture, not in the window)
+    const W = st ? st.width : innerWidth, H = st ? st.height : innerHeight;
+    const k = fixed ? Math.min(innerWidth / W, innerHeight / H) : 0, ox = fixed ? (innerWidth - W * k) / 2 : 0, oy = fixed ? (innerHeight - H * k) / 2 : 0;
+    const x = fixed ? (e.clientX - ox) / k : e.clientX * W / innerWidth, y = fixed ? (e.clientY - oy) / k : e.clientY * H / innerHeight;
+    return {x: Math.round(Math.max(0, Math.min(W - 1, x))), y: Math.round(Math.max(0, Math.min(H - 1, y)))};
+  };
+  addEventListener('mousemove', e => {
+    if (!st || !st.connected) return;
+    const n = Date.now(); pending = at(e);
+    if (n - lastMove < 25) { return; }
+    lastMove = n; input(Object.assign({t: 'move'}, pending)); pending = null;
+  });
+  addEventListener('mousedown', e => { if (!st || !st.connected) return; if (pending) input(Object.assign({t: 'move'}, pending)); input(Object.assign({t: 'move'}, at(e))); input({t: 'button', n: e.button === 2 ? 3 : e.button === 1 ? 2 : 1, down: true}); e.preventDefault(); });
+  addEventListener('mouseup', e => { if (!st || !st.connected) return; input({t: 'button', n: e.button === 2 ? 3 : e.button === 1 ? 2 : 1, down: false}); e.preventDefault(); });
+  addEventListener('contextmenu', e => e.preventDefault());
+  addEventListener('wheel', e => { if (!st || !st.connected) return; input({t: 'wheel', dx: Math.sign(e.deltaX), dy: Math.sign(e.deltaY)}); e.preventDefault(); }, {passive: false});
+  addEventListener('keydown', e => { if (!st || !st.connected || e.key === 'F5' || e.key === 'F12') return; input({t: 'key', key: e.key, down: true}); e.preventDefault(); });
+  addEventListener('keyup', e => { if (!st || !st.connected || e.key === 'F5' || e.key === 'F12') return; input({t: 'key', key: e.key, down: false}); e.preventDefault(); });
+
+  setInterval(poll, 700); poll();
+</script>

@@ -1,0 +1,203 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Calendar</title>
+<meta name="viewport" content="width=640,height=480">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #tabs { flex: none; display: flex; background: #000; }
+  .tab { flex: 1; text-align: center; padding: 9px 0; font-size: 18px; color: #8a949e; border-bottom: 3px solid transparent; }
+  .tab.on { color: #f2a900; border-color: #f2a900; }
+  .tab.focus { background: #1d242b; }
+  #body { flex: 1; min-height: 0; padding: 8px 14px; position: relative; overflow: hidden; }
+  .nav { padding: 0 22px; color: #f2a900; }
+  h2 { margin: 0 0 6px; font-size: 22px; text-align: center; color: #f2a900; }
+  #grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+  .hd { text-align: center; font-size: 13px; color: #8a949e; }
+  .day { height: 52px; border-radius: 5px; background: #1d242b; padding: 3px 6px; font-size: 18px; position: relative; }
+  .day.other { opacity: .35; }
+  .day.today { outline: 2px solid #f2a900; }
+  .day.sel { background: #f2a900; color: #000; }
+  .day i { position: absolute; left: 6px; bottom: 4px; font-style: normal; font-size: 12px; }
+  .row { display: flex; align-items: center; padding: 7px 10px; margin-bottom: 4px; border-radius: 6px; background: #1d242b; font-size: 20px; }
+  .row.sel { background: #f2a900; color: #000; }
+  .row .t { width: 70px; font-size: 16px; opacity: .8; }
+  .row.done .x { text-decoration: line-through; opacity: .5; }
+  .row .x { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .row .d { font-size: 14px; opacity: .8; margin-left: 8px; }
+  .hint { position: absolute; left: 14px; right: 14px; bottom: 6px; font-size: 13px; color: #6c7780; text-align: center; }
+  input { width: 100%; font-size: 22px; padding: 8px; margin: 6px 0; background: #1d242b; color: #fff; border: 2px solid #f2a900; border-radius: 6px; }
+</style>
+<div id="tabs"></div>
+<div id="body"></div>
+<script src="/platform.js"></script>
+<script>
+  const API = '/api/app/calendar/';
+  const pad = n => String(n).padStart(2, '0');
+  const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const get = p => fetch(API + p).then(r => r.json());
+  const post = (p, b) => fetch(API + p, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b || {})}).then(r => r.json());
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const parseIso = s => { const [y, m, d] = String(s).split('-').map(Number); return new Date(y, m - 1, d); };   // a local date (new Date("YYYY-MM-DD") is UTC midnight)
+  const esc = s => String(s).replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]));
+
+  let restored = false, tab = 'month', zone = 'body', today = new Date(), cur = new Date(), events = [], tasks = [];
+  let day = null, rows = [], sel = 0, adding = null, menu = null;   // menu: the actions of the chosen item {i}, picked with the cursor   // day: the open day view; adding: {kind, step, title, date}
+
+  async function sync() { try { const l = (await Platform.time.status()).local; today = new Date(l.year, l.month - 1, l.day); } catch (e) {} }
+  async function reload() {
+    [events, tasks] = [(await get('events')).events || [], (await get('tasks')).tasks || []];
+  }
+  const dayItems = d => [...events.filter(e => e.date === d).map(e => ({kind: 'event', ...e})), ...tasks.filter(t => t.due === d).map(t => ({kind: 'task', ...t}))];
+
+  function monthCells() {
+    const first = new Date(cur.getFullYear(), cur.getMonth(), 1), start = new Date(first); start.setDate(1 - ((first.getDay() + 6) % 7));
+    return Array.from({length: 42}, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
+  }
+
+  function listRows() {
+    if (day) {
+      rows = [...dayItems(day), {kind: 'new-event'}, {kind: 'new-task'}];
+    } else rows = [...tasks.filter(t => !t.done), ...tasks.filter(t => t.done), {kind: 'new-task'}];
+    sel = Math.min(sel, rows.length - 1);
+  }
+
+  // the page is only rebuilt when its markup changes (a finger that went down on a button must find it still there when it comes up); a number that ticks (".big") is changed in place
+  function put(el, html) {
+    const m = html.match(/(<div class="big"[^>]*>)([^<]*)(<\/div>)/);
+    const key = m ? html.replace(m[0], m[1] + m[3]) : html;
+    if (el._k === key) { const big = el.querySelector('.big'); if (big && m) big.textContent = m[2]; return; }
+    el._k = key;
+    el.innerHTML = html;
+  }
+
+  function draw() {
+    put(document.getElementById('tabs'), ['month', 'tasks'].map(t => `<div class="tab${t === tab ? ' on' : ''}${zone === 'tabs' && t === tab ? ' focus' : ''}" data-tab="${t}">${Platform.t(t === 'month' ? 'Calendar' : 'Tasks')}</div>`).join(''));
+    const body = document.getElementById('body'), b = {set innerHTML(h) { put(body, h); }};
+    if (adding) {
+      const label = adding.step === 'title' ? Platform.t(adding.kind === 'event' ? 'Event' : 'Task') : adding.step === 'date' ? Platform.t('Date (YYYY-MM-DD)') : Platform.t('Time (HH:MM, empty = all day)');
+      b.innerHTML = `<h2>${label}</h2><input id="in" autocomplete="off" value="${esc(adding[adding.step] || '')}">`;
+      const i = document.getElementById('in'); if (document.activeElement !== i) i.focus();
+      i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); nextStep(i.value); } else if (e.key === 'Escape') { e.stopPropagation(); adding = null; draw(); } };
+      return;
+    }
+    if (tab === 'month' && !day) {
+      const cells = monthCells(), s = iso(cur);
+      b.innerHTML = `<h2><span class="nav" data-month="-1">‹</span>${Platform.t(MONTHS[cur.getMonth()])} ${cur.getFullYear()}<span class="nav" data-month="1">›</span></h2><div id="grid">${WD.map(w => `<div class="hd">${Platform.t(w)}</div>`).join('')}` +
+        cells.map(d => { const k = iso(d), n = dayItems(k).length;
+          return `<div class="day${d.getMonth() !== cur.getMonth() ? ' other' : ''}${k === iso(today) ? ' today' : ''}${zone === 'body' && k === s ? ' sel' : ''}" data-date="${k}">${d.getDate()}${n ? `<i>● ${n}</i>` : ''}</div>`; }).join('') +
+        `</div>`;
+      return;
+    }
+    listRows();
+    const head = day ? `<h2><span class="nav" data-back="1">‹</span>${day}</h2>` : '';
+    b.innerHTML = head + rows.map((r, i) => {
+      const c = `row${i === sel && zone === 'body' ? ' sel' : ''}${r.done ? ' done' : ''}" data-row="${i}`;
+      if (r.kind === 'new-event') return `<div class="${c}"><span class="x">+ ${Platform.t('New event')}</span></div>`;
+      if (r.kind === 'new-task') return `<div class="${c}"><span class="x">+ ${Platform.t('New task')}</span></div>`;
+      if (i === sel && menu) return `<div class="row">${menuItems(r).map((m, j) => `<span class="x" data-menu="${j}" style="text-align:center;border-radius:5px;${j === menu.i ? 'background:#f2a900;color:#000' : ''}">${Platform.t(m)}</span>`).join('')}</div>`;
+      if (r.kind === 'event') return `<div class="${c}"><span class="t">${r.time || Platform.t('all day')}</span><span class="x">${esc(r.title)}</span></div>`;
+      return `<div class="${c}"><span class="t">${r.done ? '☑' : '☐'}</span><span class="x">${esc(r.title)}</span>${r.due ? `<span class="d">${r.due}</span>` : ''}</div>`;
+    }).join('');
+  }
+
+  function startAdd(kind, old) {   // old: an item to change (its fields are filled in; saving it keeps the id)
+    adding = old ? {kind, id: old.id, step: 'title', title: old.title || '', date: (kind === 'event' ? old.date : old.due) || '', time: old.time || '', note: old.note || ''}
+                 : {kind, step: 'title', title: '', date: day || iso(cur), time: ''};
+  }
+  async function nextStep(v) {
+    adding[adding.step] = v.trim();
+    if (adding.step === 'title') {
+      if (!adding.title) { adding = null; return draw(); }
+      adding.step = adding.kind === 'event' ? 'date' : 'date';
+      if (adding.kind === 'task' && !adding.id) adding.date = day || '';
+    } else if (adding.step === 'date') {
+      if (adding.kind === 'event') adding.step = 'time';
+      else return finishAdd();
+    } else return finishAdd();
+    draw();
+  }
+  async function finishAdd() {
+    const a = adding; adding = null;
+    const r = a.kind === 'event' ? await post('events/save', {id: a.id, note: a.note || '', title: a.title, date: a.date, time: a.time || null}) : await post('tasks/save', {id: a.id, title: a.title, due: a.date || null});
+    if (r.error) Platform.notify(r.error, {level: 'error'});
+    await reload(); draw();
+  }
+
+  async function key(k) {
+    if (adding) return;
+    if (zone === 'tabs') {
+      if (k === 'ArrowLeft' || k === 'ArrowRight') { tab = tab === 'month' ? 'tasks' : 'month'; day = null; sel = 0; }
+      else if (k === 'ArrowDown' || k === 'Enter') zone = 'body';
+      else if (k === 'Escape') return Platform.exit();
+      return;
+    }
+    if (tab === 'month' && !day) {
+      const step = {ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7}[k];
+      if (step) {
+        const n = new Date(cur); n.setDate(n.getDate() + step);
+        cur = n;
+      } else if (k === 'Enter') { day = iso(cur); sel = 0; }
+      else if (k === 'Escape') return Platform.exit();
+      return;
+    }
+    listRows();
+    if (menu) {   // the actions of an item: left/right choose, A does, B closes
+      const m = menuItems(rows[sel]);
+      if (k === 'ArrowLeft') menu.i = Math.max(0, menu.i - 1);
+      else if (k === 'ArrowRight') menu.i = Math.min(m.length - 1, menu.i + 1);
+      else if (k === 'Enter') {
+        const r = rows[sel], what = m[menu.i];
+        if (what === 'Delete') await post(r.kind === 'event' ? 'events/delete' : 'tasks/delete', {id: r.id});
+        else if (what === 'Done' || what === 'Reopen') await post('tasks/toggle', {id: r.id});
+        else if (what === 'Edit') startAdd(r.kind, r);
+        menu = null; await reload();
+      } else if (k === 'Escape') menu = null;
+      return;
+    }
+    if (k === 'ArrowUp') { if (sel === 0 && !day) zone = 'tabs'; else sel = Math.max(0, sel - 1); }
+    else if (k === 'ArrowDown') sel = Math.min(rows.length - 1, sel + 1);
+    else if (k === 'Escape') { if (day) { day = null; sel = 0; } else return Platform.exit(); }
+    else if (k === 'Enter') {
+      const r = rows[sel];
+      if (r.kind === 'new-event') startAdd('event');
+      else if (r.kind === 'new-task') startAdd('task');
+      else menu = {i: 0};
+    }
+  }
+  const menuItems = r => r.kind === 'task' ? [r.done ? 'Reopen' : 'Done', 'Edit', 'Delete', 'Back'] : ['Edit', 'Delete', 'Back'];
+
+  // the touch screen: a tap does what the cursor and A do. A day opens at once; the arrows of the month's title change the month; "‹" of a day goes back
+  addEventListener('click', async e => {
+    const q = s => e.target.closest(s);
+    let el;
+    if ((el = q('[data-tab]'))) { tab = el.dataset.tab; day = null; sel = 0; zone = 'tabs'; adding = null; menu = null; }
+    else if (adding) return;
+    else if ((el = q('[data-month]'))) cur = new Date(cur.getFullYear(), cur.getMonth() + Number(el.dataset.month), 1);
+    else if (q('[data-back]')) { day = null; sel = 0; menu = null; }
+    else if ((el = q('[data-date]'))) { cur = parseIso(el.dataset.date); zone = 'body'; day = el.dataset.date; sel = 0; }
+    else if ((el = q('[data-menu]')) && menu) { menu.i = Number(el.dataset.menu); await key('Enter'); }
+    else if ((el = q('[data-row]'))) { zone = 'body'; sel = Number(el.dataset.row); menu = null; await key('Enter'); }
+    draw();
+  });
+
+  addEventListener('keydown', e => {
+    if (adding || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape'].includes(e.key)) return;
+    e.preventDefault(); key(e.key).then(draw);
+  });
+
+  Platform.onClose(() => Platform.state.set({tab, cur: iso(cur), day}));
+  Platform.state.get().then(s => { if (s) { tab = s.tab === 'tasks' ? 'tasks' : 'month'; const d = parseIso(s.cur); if (!isNaN(d)) { cur = d; restored = true; } day = s.day || null; draw(); } });
+  Platform.launchArg().then(a => { if (a && a.date) { const d = parseIso(a.date); if (!isNaN(d)) { cur = d; day = a.date; tab = 'month'; draw(); } } }).catch(() => {});
+  Promise.all([sync(), reload()]).catch(() => {}).then(() => { if (!restored) cur = new Date(today); draw(); });
+  setInterval(() => { if (!adding) reload().then(draw).catch(() => {}); }, 5000);   // Caroline may have changed it
+
+  Platform.tools.handle('show_date', async args => {
+    const d = parseIso(args.date); if (isNaN(d)) return 'The date is YYYY-MM-DD';
+    adding = null; tab = 'month'; cur = d; day = iso(d); sel = 0; await reload(); draw(); return day + ': ' + dayItems(day).map(i => i.title).join(', ');
+  });
+  Platform.tools.handle('show_tasks', async () => { adding = null; tab = 'tasks'; day = null; sel = 0; await reload(); draw(); return tasks.filter(t => !t.done).length + ' open'; });
+</script>

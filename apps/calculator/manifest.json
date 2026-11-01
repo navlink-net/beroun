@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "id": "calculator",
+  "name": "Calculator",
+  "version": "1.1.0",
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "caroline": {
+    "description": "Calculator: key in a sum on the pad and read the result",
+    "skills": ["skills"],
+    "tools": [
+      {"name": "get_display", "description": "What the display shows now: the expression and the result", "input": {}},
+      {"name": "calculate", "description": "Keys in an expression (+ - * / % and brackets), presses = and returns the display", "input": {"expression": "string"}},
+      {"name": "clear", "description": "Clears the display", "input": {}}
+    ]
+  }
+}

@@ -1,0 +1,59 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Video (external screen)</title>
+<!--
+  The video player on the external (HDMI) screen: the picture and nothing else. The queue, the order, the saved place and the controls are in index.html on the console, which is the remote;
+  this page only has the one <video> and does what the remote says:
+    the remote -> {cmd: "src", url, time, play} | "play" | "pause" | "seekto" {t} | "clear"
+    this page  -> {ev: "time", t, d, p, url} (about four times a second) | "ended" | "error" | "ready" {hasSrc, t, p}
+  Covered by another app, closed or unplugged (Platform.onSuspend) it pauses and keeps the video, the time and whether it was playing in Platform.state; when it is the page of the window again
+  (the app under another one comes back) it loads that video at that time and goes on playing if it was playing, and says "ready" with the place so that the remote knows.
+-->
+<style>html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; } video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }</style>
+<video id="v" playsinline preload="auto"></video>
+<script src="/platform.js"></script>
+<script>
+  const v = document.getElementById('v');
+  let url = null, lastSent = 0;
+  const post = m => Platform.display.send(m).catch(() => {});
+  const report = force => {
+    const n = Date.now(); if (!force && n - lastSent < 250) return; lastSent = n;
+    post({ev: 'time', t: v.currentTime || 0, d: isFinite(v.duration) ? v.duration : 0, p: v.paused, url});
+  };
+  for (const ev of ['timeupdate', 'durationchange']) v.addEventListener(ev, () => report(false));
+  for (const ev of ['seeked', 'play', 'pause']) v.addEventListener(ev, () => report(true));
+  v.addEventListener('ended', () => post({ev: 'ended'}));
+  v.addEventListener('error', () => { if (url) post({ev: 'error'}); });
+
+  function load(src, time, play) {
+    url = src;
+    v.src = src;
+    if (time > 0) v.addEventListener('loadedmetadata', () => { v.currentTime = time; }, {once: true});
+    if (play) v.play().catch(() => {});
+    report(true);
+  }
+  Platform.display.onMessage(m => {
+    if (!m) return;
+    if (m.cmd === 'src' && typeof m.url === 'string') load(m.url, +m.time || 0, !!m.play);
+    else if (m.cmd === 'play') v.play().catch(() => {});
+    else if (m.cmd === 'pause') v.pause();
+    else if (m.cmd === 'seekto') v.currentTime = +m.t || 0;
+    else if (m.cmd === 'clear') { url = null; v.pause(); v.removeAttribute('src'); v.load(); report(true); }
+  });
+
+  // covered, closed or unplugged: the place is kept (the next page of the window comes after this answer)
+  Platform.onSuspend(async () => {
+    const playing = !v.paused;
+    v.pause();
+    await Platform.state.set({url, t: v.currentTime || 0, playing}).catch(() => {});
+    report(true);
+  });
+
+  (async () => {
+    const [l, saved] = await Promise.all([Platform.display.launch().catch(() => ({})), Platform.state.get().catch(() => null)]);
+    let t = 0, playing = false;
+    if (l && l.resume && saved && saved.url) { t = saved.t || 0; playing = !!saved.playing; load(saved.url, t, playing); }
+    post({ev: 'ready', hasSrc: !!url, t, p: !playing});
+  })();
+</script>

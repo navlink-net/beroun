@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "caroline",
+  "name": "Caroline",
+  "module": "caroline",
+  "service": "caroline-backend",
+  "views": {"chat": "caroline", "voice": "caroline-voice", "wizard": "caroline-wizard", "settings": "caroline"},
+  "capabilities": ["ask", "chat", "voice", "face", "wizard", "update", "messaging"],
+  "tools": "caroline-plugins"
+}

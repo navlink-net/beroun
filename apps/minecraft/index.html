@@ -1,0 +1,171 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Minecraft</title>
+<meta name="viewport" content="width=640,height=480">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; padding: 18px 28px 10px; }
+  #head { flex: none; display: flex; align-items: baseline; gap: 14px; }
+  #head h1 { margin: 0; font-size: 34px; color: #7cc35a; }
+  #head .sub { font-size: 18px; color: #8a949e; }
+  #wallet { margin-left: auto; font-size: 18px; color: #f2a900; font-variant-numeric: tabular-nums; }
+  #body { flex: 1; min-height: 0; margin-top: 14px; position: relative; }
+  .row { padding: 12px 16px; margin-bottom: 8px; border-radius: 6px; background: #1d242b; font-size: 26px; }
+  .row.sel { background: #7cc35a; color: #000; }
+  .msg { margin-top: 14px; font-size: 18px; color: #e8b4b0; min-height: 24px; }
+  .big { font-size: 30px; text-align: center; margin-top: 60px; }
+  .note { font-size: 18px; color: #8a949e; text-align: center; margin-top: 14px; }
+  .clock { font-size: 56px; text-align: center; margin-top: 24px; color: #f2a900; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  td { padding: 2px 6px; border-bottom: 1px solid #222a31; }
+  td:first-child { color: #f2a900; width: 30%; }
+  td:last-child { color: #8a949e; }
+  #hint { flex: none; font-size: 14px; color: #6c7780; text-align: center; white-space: pre; }
+</style>
+<div id="head"><h1>Minecraft</h1><span class="sub">in the cloud</span><span id="wallet"></span></div>
+<div id="body"></div>
+<div id="hint"></div>
+<script src="/platform.js"></script>
+<script>
+  // The cloud Minecraft: this page starts the game server through the app's service (minecraftd), then the player (the hidden native app
+  // minecraft-player) shows the game, on the console or, with a screen plugged in, on the external screen. Keys: the cursor, A = Enter, B = Escape.
+  const API = '/api/app/minecraft/';
+  const T = (s, args) => Platform.t(s, args);
+  const get = p => fetch(API + p).then(r => r.json());
+  const post = (p, b) => fetch(API + p, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b || {})}).then(r => r.json());
+  const pad = n => String(n).padStart(2, '0');
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+  const CONTROLS = [
+    ['Left stick', 'walk; pushed all the way: sprint'], ['Right stick', 'look around'], ['R1', 'mine, attack'], ['X', 'use, place'],
+    ['A', 'jump'], ['B', 'sneak (on / off)'], ['Y', 'inventory'], ['D-pad ← →', 'hotbar slot'], ['D-pad ↓', 'drop'], ['D-pad ↑', 'chat'],
+    ['START', 'pause'], ['In menus', 'a stick moves the pointer, A clicks, X right-clicks, B closes'], ['MODE', 'ends the game'],
+  ];
+
+  // On Android (a phone, a touch screen) the app has no menu and no key hints: opening it starts the game, as the cloud's own session page does on a phone; the
+  // player then is the node's stream page with its touch controls (apps/minecraft-player/player.html). A message (an error, the wallet) is tapped to try again.
+  const ANDROID = /Android/.test(navigator.userAgent);
+  let mode = 'menu', sel = 0, node = 'none', msg = '', since = 0, onBig = false, timer = null;
+
+  // the size the node draws: the console's 640x480, or at most 720 lines with the external screen's own proportions (the player scales it to fill)
+  async function screen() {
+    const d = await Platform.display.status().catch(() => ({}));
+    if (!d.connected || !d.width || !d.height) return {size: '640x480', big: false};
+    const h = Math.min(720, d.height), w = Math.round(h * d.width / d.height / 8) * 8;
+    return {size: w + 'x' + h, big: true};
+  }
+
+  function rows() {
+    const alive = node !== 'none' && node !== 'unknown';
+    if (ANDROID) return [['play', alive ? 'Continue' : 'Play']];
+    return [alive ? ['play', 'Continue'] : ['play', 'Play'], ['controls', 'Controls'], ...(alive ? [['stop', 'Stop the game server']] : [])];
+  }
+
+  function draw() {
+    const body = document.getElementById('body'), hint = document.getElementById('hint');
+    if (mode === 'menu') {
+      const r = rows();
+      sel = Math.min(sel, r.length - 1);
+      body.innerHTML = r.map(([, label], i) => `<div class="row${i === sel ? ' sel' : ''}">${esc(T(label))}</div>`).join('') +
+        `<div class="msg">${esc(msg ? T(msg) : '')}</div>`;
+      hint.textContent = ANDROID ? '' : T('A: choose   B: leave');
+    } else if (mode === 'controls') {
+      body.innerHTML = '<table>' + CONTROLS.map(([b, d]) => `<tr><td>${esc(T(b))}</td><td>${esc(T(d))}</td></tr>`).join('') + '</table>';
+      hint.textContent = T('B: back');
+    } else if (mode === 'starting') {
+      const s = Math.floor((Date.now() - since) / 1000);
+      body.innerHTML = `<div class="big">${esc(T('Starting the game server…'))}</div><div class="clock">${pad(Math.floor(s / 60))}:${pad(s % 60)}</div>` +
+        (ANDROID ? '' : `<div class="note">${esc(T('A cold start takes up to five minutes.'))}</div>`);
+      hint.textContent = ANDROID ? '' : T('B: cancel');
+    } else if (mode === 'playing') {
+      body.innerHTML = `<div class="big">${esc(T(onBig ? 'The game is on the big screen.' : 'The game is starting.'))}</div>` +
+        (ANDROID ? '' : `<div class="note">${esc(T('MODE ends the game; the game server stops with it.'))}</div>`);
+      hint.textContent = '';
+    }
+  }
+
+  async function refresh() {
+    const [n, b] = await Promise.all([get('node').catch(() => ({node: 'unknown'})), get('balance').catch(() => ({}))]);
+    node = n.node || 'none';
+    document.getElementById('wallet').textContent = b.balance != null ? T('Wallet: {sum}', {sum: Number(b.balance).toFixed(2) + ' ' + (b.currency || '')}) : '';
+    if (b.error && !msg) msg = b.error;
+    draw();
+  }
+
+  async function play() {
+    const scr = await screen();
+    msg = '';
+    await post('start', {size: scr.size});   // the screen needs no name: on the external screen the shell starts the player in its own Wayland
+    mode = 'starting'; since = Date.now(); onBig = scr.big;
+    draw();
+  }
+
+  async function openPlayer() {
+    mode = 'playing';
+    if (onBig) {
+      try { await Platform.display.open({}); draw(); return; } catch (e) { onBig = false; }   // the screen went away meanwhile: the console
+    }
+    await fetch('/api/launch', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: 'minecraft-player'})});
+    draw();
+  }
+
+  async function poll() {
+    if (mode !== 'starting' && mode !== 'playing') return;
+    const st = await get('status').catch(() => null);
+    if (!st) return;
+    if (mode === 'starting') {
+      if (st.state === 'ready' || st.state === 'playing') return openPlayer();
+      if (st.state === 'error') { mode = 'menu'; msg = st.reason || 'The game server could not start'; refresh(); return; }
+      draw();
+    } else if (['ended', 'idle', 'error'].includes(st.state)) {
+      mode = 'menu'; msg = st.reason || '';
+      if (onBig) Platform.display.close().catch(() => {});
+      refresh();
+    }
+  }
+
+  async function key(k) {
+    if (mode === 'menu') {
+      const r = rows();
+      if (k === 'ArrowUp') sel = (sel + r.length - 1) % r.length;
+      else if (k === 'ArrowDown') sel = (sel + 1) % r.length;
+      else if (k === 'Escape') return Platform.exit();
+      else if (k === 'Enter') {
+        const what = r[sel][0];
+        if (what === 'play') return play();
+        if (what === 'controls') mode = 'controls';
+        if (what === 'stop') { await post('stop'); msg = 'The game server is stopped.'; node = 'none'; setTimeout(refresh, 3000); }
+      }
+    } else if (mode === 'controls') {
+      if (k === 'Escape' || k === 'Enter') mode = 'menu';
+    } else if (mode === 'starting') {
+      if (k === 'Escape') { await post('stop'); mode = 'menu'; msg = ''; node = 'none'; setTimeout(refresh, 3000); }
+    }
+    draw();
+  }
+
+  document.getElementById('body').addEventListener('click', () => { if (ANDROID && mode === 'menu') key('Enter'); });
+  addEventListener('keydown', e => { if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape'].includes(e.key)) { e.preventDefault(); key(e.key); } });
+  // leaving the app stops the game server at once: the wallet pays per second, not waiting for the idle teardown
+  Platform.onClose(async () => {
+    await Platform.state.set({msg});
+    const st = await get('status').catch(() => ({}));
+    if (mode !== 'menu' || ['starting', 'ready', 'playing'].includes(st.state) || (node !== 'none' && node !== 'unknown')) await post('stop').catch(() => {});
+  });
+  Platform.display.on(() => { if (mode === 'menu') draw(); });
+
+  (async () => {
+    const s = await Platform.state.get().catch(() => null);
+    if (s && s.msg) msg = s.msg;
+    const st = await get('status').catch(() => ({}));
+    if (st.state === 'starting') { mode = 'starting'; since = Date.now(); }
+    else if (st.state === 'ready' || st.state === 'playing') mode = 'playing';
+    draw();
+    await refresh();
+    timer = setInterval(poll, 1000);
+    if (ANDROID && mode === 'menu' && !msg) play();
+    else if (ANDROID && mode === 'playing') openPlayer();   // the node is up from before (the app was left or reopened): the player comes back at once
+  })();
+</script>

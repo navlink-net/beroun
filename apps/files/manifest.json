@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "id": "files",
+  "name": "Files",
+  "version": "1.1.0",
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "caroline": {
+    "description": "File manager: shows a folder of the SD card in the window (the files themselves are reached with your own file tools)",
+    "skills": ["skills"],
+    "tools": [
+      {"name": "current_folder", "description": "The folder the window shows and what is in it", "input": {}},
+      {"name": "show_folder", "description": "Shows a folder of the SD card in the window (a path from the card's root, '' for the root)", "input": {"path": "string"}}
+    ]
+  }
+}

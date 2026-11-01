@@ -1,0 +1,33 @@
+{
+  "format": 1,
+  "id": "communicator",
+  "name": "Communicator",
+  "version": "0.2.0",
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "services": [
+    {"id": "whatsapp-owner", "name": "WhatsApp sidecar (the owner's number)", "host": "child", "parent": "caroline-backend",
+     "match": {"argv": "index.js", "env": {"WHATSAPP_AUTH_DIR": "/messengers/whatsapp/auth_owner"}},
+     "start": "system", "priority": 90, "memory_mb": 125, "sleep": true},
+    {"id": "whatsapp-self", "name": "WhatsApp sidecar (Caroline's own number)", "host": "child", "parent": "caroline-backend",
+     "match": {"argv": "index.js", "env": {"WHATSAPP_AUTH_DIR": "/messengers/whatsapp/auth_self"}},
+     "start": "system", "priority": 90, "memory_mb": 125, "sleep": true},
+    {"id": "signal-owner", "name": "signal-cli (the owner's number)", "host": "child", "parent": "caroline-backend",
+     "match": {"argv": ["daemon", "/messengers/signal/config_owner"]},
+     "start": "system", "priority": 90, "sleep": true},
+    {"id": "signal-self", "name": "signal-cli (Caroline's own number)", "host": "child", "parent": "caroline-backend",
+     "match": {"argv": ["daemon", "/messengers/signal/config_self"]},
+     "start": "system", "priority": 90, "sleep": true}
+  ],
+  "caroline": {
+    "description": "Mail, WhatsApp, Telegram, Signal and Slack in one place: show a conversation or the list on the screen (reading and sending is done with her messages_* and send tools)",
+    "skills": ["skills"],
+    "tools": [
+      {"name": "current_view", "description": "What the window shows: the open conversation, or the list and its filter", "input": {}},
+      {"name": "show_chat", "description": "Opens a conversation in the window: its id or a part of its title", "input": {"chat": "string"}},
+      {"name": "show_list", "description": "Shows the list of conversations: service all, mail, whatsapp, telegram, signal or slack; role owner or self", "input": {"service": "string?", "role": "string?"}}
+    ]
+  }
+}

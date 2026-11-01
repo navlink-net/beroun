@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="72" height="72">
+  <!-- a squirrel (Ratatoskr, the squirrel of the Norse tree): a big S-shaped tail that rises above the head and curls forward, a round head with a blunt
+       snout and a tall ear, an acorn in the front paws. One white silhouette, the details are cut out of it. -->
+  <defs>
+    <mask id="cut">
+      <rect width="72" height="72" fill="#fff"/>
+      <circle cx="54" cy="27" r="2.1" fill="#000"/>
+      <circle cx="64" cy="33" r="1.7" fill="#000"/>
+      <path d="M35 64C30 56 34 45 43 41" fill="none" stroke="#000" stroke-width="2.6" stroke-linecap="round"/>
+      <path d="M17 50C10 40 12 29 19 22" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M24 53C19 46 20 38 25 32" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round"/>
+      <ellipse cx="55" cy="49" rx="8" ry="9" fill="#000"/>
+    </mask>
+  </defs>
+  <g fill="#fff" mask="url(#cut)">
+    <!-- the tail -->
+    <path d="M35 64C6 64 1 36 11 23C17 15 13 8 23 5C32 3 40 8 42 15C44 21 37 25 35 33C33 42 34 52 40 58Z"/>
+    <!-- the body and the hind foot -->
+    <path d="M33 66C28 54 34 43 44 40C55 38 61 47 59 56C58 62 53 66 46 66Z"/>
+    <ellipse cx="50" cy="66" rx="10" ry="3.6"/>
+    <!-- the head, the snout, the ear -->
+    <circle cx="52" cy="30" r="9"/>
+    <ellipse cx="60" cy="33" rx="5.5" ry="3.8"/>
+    <path d="M44 27C41 19 43 11 47 7C51 11 54 17 54 24Z"/>
+  </g>
+  <!-- the acorn (on top: the mask has cut a gap around it) -->
+  <g fill="#fff">
+    <ellipse cx="55" cy="51" rx="5" ry="6.2"/>
+    <path d="M48.5 47C49 41 61 41 61.5 47Z"/>
+  </g>
+</svg>

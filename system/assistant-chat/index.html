@@ -1,0 +1,121 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=640,initial-scale=1">
+<title>Assistant</title>
+<script src="/platform.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #111; color: #fff; overflow: hidden; font-family: "DejaVu Sans", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  #head { flex: none; height: 36px; line-height: 36px; padding: 0 14px; background: #000; color: #f2a900; font-size: 19px; font-weight: bold; display: flex; gap: 10px; }
+  #head .name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #head .state { font-size: 14px; font-weight: normal; color: #9aa4ad; }
+  #log { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .m { max-width: 86%; padding: 8px 11px; border-radius: 10px; font-size: 17px; line-height: 1.3; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .me { align-self: flex-end; background: #f2a900; color: #000; }
+  .ai { align-self: flex-start; background: #1d242b; }
+  .tool { align-self: flex-start; font-size: 13px; color: #9aa4ad; padding: 0 4px; }
+  .err { align-self: stretch; font-size: 15px; color: #ff6b6b; padding: 0 4px; }
+  .note { align-self: center; font-size: 15px; color: #9aa4ad; text-align: center; padding: 20px 10px; }
+  .ai code, .me code { font-family: "DejaVu Sans Mono", monospace; font-size: 15px; background: rgba(255,255,255,.08); padding: 0 3px; border-radius: 3px; }
+  #dots { align-self: flex-start; display: none; color: #9aa4ad; font-size: 22px; letter-spacing: 3px; padding: 0 6px; }
+  #dots.on { display: block; }
+  #bar { flex: none; padding: 6px 10px 8px; display: flex; gap: 8px; }
+  #in { flex: 1; height: 42px; border: 0; border-radius: 8px; padding: 0 12px; font: 18px "DejaVu Sans", sans-serif; background: #fff; color: #000; outline: 0; }
+  #in:focus { outline: 3px solid #f2a900; }
+</style>
+</head>
+<body>
+<div id="head"><span class="name" id="name" translate="no">Assistant</span><span class="state" id="state"></span></div>
+<div id="log"></div>
+<div id="bar"><input id="in" autocomplete="off" spellcheck="false" placeholder="Write a message"></div>
+<script>
+// The standard chat view of OS Beroun (docs/assistant-contract.md): the chat of an assistant that has no view of its own (Claude). It speaks the chat protocol of the
+// contract with the assistant's backend: ws://127.0.0.1:<port>/?tab=1, {"type": "user_message"} out, {"type": "sdk_message"} / {"type": "history"} / {"type": "busy"} in.
+// The conversation is the backend's: closing the view loses nothing. Keys: Up / Down scroll, A (Enter) writes (the field and the keyboard), Enter sends, B leaves.
+const $ = s => document.querySelector(s);
+const log = $('#log'), input = $('#in');
+const dots = document.createElement('div'); dots.id = 'dots'; dots.textContent = '•••';
+let ws = null, busy = false, info = null, retry = 0;
+
+const short = n => String(n || '').replace(/^mcp__beroun__/, '').replace(/^mcp__([^_]+)__/, '$1: ');
+function esc(t) { return t.replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c])); }
+function inline(t) { return esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>'); }
+function add(cls, text, html) {
+  const d = document.createElement('div'); d.className = 'm ' + cls;
+  if (html) d.innerHTML = inline(text); else d.textContent = text;
+  log.insertBefore(d, dots.parentNode === log ? dots : null);
+  return d;
+}
+function line(cls, text) { const d = add('', text); d.className = cls; return d; }
+function bottom() { log.scrollTop = log.scrollHeight; }
+
+function show(evt) {
+  if (evt.type === 'user') {
+    if (evt.isOwnerText) for (const b of evt.message.content || []) if (b.type === 'text') add('me', b.text);
+    return;
+  }
+  if (evt.type === 'assistant') {
+    for (const b of (evt.message && evt.message.content) || []) {
+      if (b.type === 'text' && b.text && b.text.trim()) add('ai', b.text.trim(), true);
+      else if (b.type === 'tool_use') line('tool', '⚙ ' + short(b.name));
+    }
+    return;
+  }
+  if (evt.type === 'result' && (evt.is_error || String(evt.subtype || '').startsWith('error'))) line('err', evt.result || Platform.t('The answer could not be finished'));
+}
+function setBusy(b) {
+  busy = b; dots.className = b ? 'on' : '';
+  if (dots.parentNode !== log) log.appendChild(dots);
+  $('#state').textContent = b ? Platform.t('thinking…') : '';
+  bottom();
+}
+
+async function connect() {
+  try { info = await (await fetch('/api/assistant/status')).json(); } catch (e) { info = null; }
+  if (info && info.name) { $('#name').textContent = info.name; document.title = info.name; }
+  if (!info || !info.running || !info.port) {
+    $('#state').textContent = Platform.t('starting…');
+    return setTimeout(connect, Math.min(2000 + retry++ * 1000, 8000));
+  }
+  ws = new WebSocket(`ws://127.0.0.1:${info.port}/?tab=1`);
+  ws.onopen = () => { retry = 0; $('#state').textContent = ''; };
+  ws.onmessage = e => {
+    let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+    if (m.type === 'history') {
+      log.textContent = ''; log.appendChild(dots);
+      (m.events || []).forEach(show);
+      if (!(m.events || []).length) line('note', info.signed_in === false ? Platform.t('Not signed in yet: Settings > Assistant.') : Platform.t('Ask anything, or tell me what to do on the device.'));
+      bottom();
+    } else if (m.type === 'sdk_message') { show(m.message); bottom(); }
+    else if (m.type === 'busy') setBusy(!!m.busy);
+    else if (m.type === 'error') { line('err', m.message || 'error'); bottom(); }
+  };
+  ws.onclose = () => { ws = null; $('#state').textContent = Platform.t('connecting…'); setTimeout(connect, 2000); };
+}
+
+function send() {
+  const t = input.value.trim();
+  if (!t || busy || !ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({type: 'user_message', text: t}));
+  input.value = '';
+}
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); send(); }
+  else if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); input.blur(); }
+});
+addEventListener('keydown', e => {
+  if (e.defaultPrevented || document.activeElement === input) return;
+  if (e.key === 'ArrowUp') { log.scrollTop -= 60; e.preventDefault(); }
+  else if (e.key === 'ArrowDown') { log.scrollTop += 60; e.preventDefault(); }
+  else if (e.key === 'Enter') { e.preventDefault(); input.focus(); }
+  else if (e.key === 'Escape') { e.preventDefault(); Platform.exit(); }
+});
+log.appendChild(dots);
+connect();
+</script>
+</body>
+</html>

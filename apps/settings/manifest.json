@@ -1,0 +1,26 @@
+{
+  "format": 1,
+  "id": "settings",
+  "name": "Settings",
+  "version": "1.3.0",
+  "system": true,
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "caroline": {
+    "description": "System settings: interface language, keyboard layouts, date, time, time zone and network time, and the mail and messenger accounts (Accounts)",
+    "skills": ["skills"],
+    "tools": [
+      {"name": "get_settings", "description": "The interface language, the enabled keyboard layouts, the available languages, and the date, time, time zone and network time (NTP) state", "input": {}},
+      {"name": "get_accounts", "description": "The mail and messenger accounts linked on the device (shared with Communicator): id, service, whose they are and their state", "input": {}},
+      {"name": "remove_account", "description": "Deletes a linked account by its id from get_accounts, with its stored messages (ask the owner first)", "input": {"id": "string"}},
+      {"name": "open_accounts", "description": "Opens Settings > Accounts, where the owner adds an account, edits one or deletes it; use it when the owner wants to add or change an account (their passwords and codes are typed by them)", "input": {}},
+      {"name": "set_language", "description": "Sets the interface language of the whole device (a code from get_settings, e.g. 'ru'); the Settings page reloads in it", "input": {"code": "string"}},
+      {"name": "set_layouts", "description": "Sets the enabled on-screen keyboard layouts: language codes separated by commas, at least one", "input": {"codes": "string"}},
+      {"name": "set_timezone", "description": "Sets the time zone of the device: an IANA name such as 'Europe/Prague' or 'UTC'", "input": {"zone": "string"}},
+      {"name": "set_auto_time", "description": "Turns automatic date and time (network time, NTP) on or off: 'true' or 'false'", "input": {"on": "string"}},
+      {"name": "set_time", "description": "Sets the date and time by hand, in the device's time zone (refused while automatic date and time is on): date as YYYY-MM-DD, time as HH:MM", "input": {"date": "string", "time": "string"}}
+    ]
+  }
+}

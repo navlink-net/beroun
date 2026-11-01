@@ -1,0 +1,731 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<!--
+  IntelliCat home screen / launcher: Metro-style tile grid under a thin status bar.
+  Tile look, palette and "grid always fills the screen" idea come from CATalogue's
+  ondevice/public-launcher/index.html (reimplemented here for the 640x480 console).
+  Input: D-pad (arrow keys) + A (Enter), and the touchscreen (tap to launch, drag to scroll).
+  Moving an app: a long press and a drag, or SELECT, the D-pad and SELECT again; MODE takes it back.
+  The notification panel: R1, or a long press on the status bar.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IntelliCat</title>
+<meta name="viewport" content="width=640,height=480">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: #fff;
+               font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+
+  /* status bar: notifications on the left (the larger part), battery + clock on the right */
+  #bar { flex: none; height: 40px; background: #000; display: flex; align-items: center;
+         padding: 0 12px; gap: 12px; border-bottom: 1px solid #222; }
+  #notes { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; }
+  #ntext { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #fff; }
+  #ntext.old { color: #777; }
+  #ntext .app { color: #f2a900; margin-right: 6px; }
+  #ncount { flex: none; background: #f2a900; color: #000; border-radius: 9px; padding: 0 7px; font-size: 12px;
+            font-weight: bold; line-height: 18px; display: none; }
+  #batt { flex: none; font-size: 14px; color: #aaa; }
+  #clock { flex: none; font-size: 22px; font-weight: bold; letter-spacing: .02em; }
+
+  /* tile grid: fixed 160px cells, scrolls in both directions */
+  #grid { flex: 1; min-height: 0; overflow: auto; background: #1a1a1a; }
+  #grid::-webkit-scrollbar { display: none; }
+  #content { position: relative; }
+  .tile, #content .empty { position: absolute; width: var(--cw, 160px); height: var(--ch, 160px); }
+  #content .empty { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15); pointer-events: none; }
+  .tile { border: 0; margin: 0; padding: 8px; font-family: inherit; color: #fff; cursor: pointer;
+          display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+          box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15); }
+  .tile.sel, .empty.sel { outline: 5px solid #fff; outline-offset: -5px; }
+  .tile.busy { opacity: .55; }
+  /* an app being moved: lifted over the grid */
+  .tile.lift { z-index: 3; transform: scale(.9); opacity: .92; outline: 5px solid #f2a900; outline-offset: -5px;
+               box-shadow: 0 8px 22px rgba(0, 0, 0, .65); pointer-events: none; }
+  .tile .glyph { font-size: 64px; line-height: 1; font-weight: bold; }
+  .tile img { width: 72px; height: 72px; object-fit: contain; pointer-events: none; }
+  /* "more beyond this edge": a small arrow over the grid (dots looked like a handle to drag); a tap on it scrolls one cell that way */
+  .more { position: fixed; display: none; align-items: center; justify-content: center; z-index: 5; cursor: pointer;
+          background: rgba(0, 0, 0, .55); color: #fff; font-size: 26px; font-weight: bold; line-height: 1; touch-action: none; user-select: none; }
+  #moreR { right: 0; top: calc(40px + (100vh - 40px) / 2 - 22px); width: 30px; height: 44px; border-radius: 8px 0 0 8px; }
+  #moreD { bottom: 0; left: calc(50% - 22px); width: 44px; height: 30px; border-radius: 8px 8px 0 0; }
+  /* first-start login: Kocour on the left, the form (tabs Sign in / Sign up) as flat colored blocks in the launcher's own style on the right */
+  #login { flex: 1; min-height: 0; background: radial-gradient(360px 360px at 19% 62%, #2a2410, #1a1a1a 72%); display: none; flex-direction: row; }
+  #login .lart { flex: none; width: 228px; overflow: hidden; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 16px; }
+  #login .lart img { height: 270px; max-height: calc(100% - 8px); width: auto; filter: drop-shadow(0 10px 10px rgba(0,0,0,.5));
+                     animation: cwbob 2.6s ease-in-out infinite; transform-origin: 50% 100%; }
+  #login .lform { flex: 1; min-width: 0; overflow: auto; padding: 14px 18px 14px 0; display: flex; flex-direction: column; gap: 10px; }
+  #login .lform > * { flex: none; }
+  #ltabs { display: flex; height: 46px; }
+  #ltabs .ltab { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #999; border-bottom: 3px solid #444; cursor: pointer; }
+  #ltabs .ltab.on { color: #f2a900; font-weight: bold; border-bottom-color: #f2a900; }
+  #login #ltabs.sel { outline: 0; }
+  #ltabs.sel .ltab.on { outline: 5px solid #fff; outline-offset: -5px; }
+  /* first start: the language comes first */
+  #langscr { flex: 1; min-height: 0; background: #1a1a1a; display: none; flex-direction: column; }
+  #langscr h2 { margin: 0; flex: none; padding: 10px 18px 6px; color: #f2a900; font-size: 22px; }
+  #langlist { flex: 1; min-height: 0; overflow: auto; touch-action: none; }
+  #langlist .lrow { height: 50px; line-height: 50px; padding: 0 18px; font-size: 21px; border-bottom: 1px solid #242c34; }
+  #langlist .lrow.sel { background: #f2a900; color: #000; }
+  #gate { flex: 1; background: #1a1a1a; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #aaa; font-size: 20px; }
+  #gate h2 { margin: 0; color: #f2a900; font-size: 26px; }
+  /* after a login, while Caroline starts and her start wizard is still to come: the launcher waits here (the wizard then takes the window) */
+  #cwait { flex: 1; min-height: 0; background: radial-gradient(520px 340px at 50% 0%, #2a2410, #1a1a1a 70%); display: none; flex-direction: column; align-items: center;
+           justify-content: center; gap: 10px; padding: 0 40px; text-align: center; }
+  #cwait .pic { height: 190px; display: flex; align-items: flex-end; justify-content: center; }
+  #cwait .pic img { height: 190px; width: auto; animation: cwbob 2.6s ease-in-out infinite; transform-origin: 50% 100%; filter: drop-shadow(0 10px 10px rgba(0,0,0,.5)); }
+  #cwait .pic svg { width: 110px; height: 110px; animation: cwglow 2.4s ease-in-out infinite; }
+  @keyframes cwbob { 0%, 100% { transform: translateY(0) rotate(-1.2deg); } 50% { transform: translateY(-8px) rotate(1.2deg); } }
+  @keyframes cwglow { 50% { opacity: .65; transform: scale(.95); } }
+  #cwait h2 { margin: 4px 0 0; color: #f2a900; font-size: 26px; }
+  #cwait .sub { color: #bbb; font-size: 17px; line-height: 1.35; }
+  #cwait .cbar { width: 100%; height: 12px; border-radius: 6px; background: #333; overflow: hidden; margin-top: 6px; }
+  #cwait .cfill { height: 100%; width: 3%; border-radius: 6px; background: linear-gradient(90deg, #c8651b, #f2a900); transition: width .5s; }
+  #cwait .cmeta { width: 100%; display: flex; justify-content: space-between; color: #999; font-size: 15px; }
+  #login input, #login .go { height: 54px; border: 0; border-radius: 0; font: 22px "DejaVu Sans", sans-serif; padding: 0 14px; }
+  #login input { background: #fff; color: #000; width: 100%; outline: 0; }
+  #login .go { background: #00A2ED; color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  #login .sel { outline: 5px solid #fff; outline-offset: -5px; }
+  .pw { position: relative; }
+  .pw input { padding-right: 64px; }
+  #leye { position: absolute; right: 0; top: 0; width: 54px; height: 54px; display: flex; align-items: center; justify-content: center; color: #555; cursor: pointer; }
+  #leye.sel { outline: 5px solid #fff; outline-offset: -5px; background: #00A2ED; color: #fff; }
+  #lerr { min-height: 24px; color: #ff6b6b; font-size: 16px; }
+  #notes { cursor: pointer; }
+  #dnd { flex: none; display: none; background: #444; color: #fff; border-radius: 4px; padding: 0 6px; font-size: 12px; font-weight: bold; line-height: 18px; }
+  /* the notification panel: opened by a long press on the bar or R1, replaces the tile grid */
+  #panel { flex: 1; min-height: 0; background: #1a1a1a; display: none; flex-direction: column; }
+  #panel h2 { margin: 0; flex: none; padding: 8px 18px 4px; color: #f2a900; font-size: 22px; }
+  #plist { flex: 1; min-height: 0; overflow: auto; touch-action: none; }
+  #plist .prow { min-height: 50px; padding: 6px 12px 6px 18px; font-size: 18px; border-bottom: 1px solid #242c34; display: flex; align-items: center; gap: 10px; }
+  #plist .prow.sel { background: #f2a900; color: #000; }
+  #plist .prow .ptext { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  #plist .prow .papp { color: #f2a900; margin-right: 6px; }
+  #plist .prow.sel .papp { color: #000; font-weight: bold; }
+  #plist .prow.err .ptext { color: #ff8080; }
+  #plist .prow.sel.err .ptext { color: #7a0000; }
+  #plist .prow .pat { flex: none; font-size: 14px; opacity: .7; }
+  #plist .prow .px { flex: none; width: 36px; height: 36px; border: 3px solid currentColor; border-radius: 8px; text-align: center; line-height: 30px; font-size: 22px; }
+  #plist .prow.item.unread { border-left: 5px solid #f2a900; padding-left: 13px; }
+  #plist .empty { padding: 20px 18px; color: #777; font-size: 18px; }
+  #bar.flash { animation: flash .4s steps(2) 3; }
+  @keyframes flash { 50% { background: #f2a900; } }
+  #ntext.err { color: #ff6b6b; }
+  .tile { overflow: hidden; }
+  .tile .badge { position: absolute; top: 6px; right: 6px; min-width: 30px; height: 30px; padding: 0 7px; border-radius: 15px; box-sizing: border-box;
+                 background: #fff; color: #000; font-size: 18px; font-weight: bold; line-height: 30px; text-align: center; }
+  .tile .label { font-size: 17px; line-height: 1.2; text-align: center; width: 100%;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <div id="notes"><span id="ntext" class="old">IntelliCat</span><span id="ncount"></span></div>
+  <div id="dnd">DND</div>
+  <div id="batt"></div>
+  <div id="clock">--:--</div>
+</div>
+<div id="login">
+  <div class="lart"><img src="/kocour.webp" alt="Kocour, the IntelliCat mascot"></div>
+  <div class="lform">
+    <div id="ltabs"><div class="ltab on" data-m="in">Sign in</div><div class="ltab" data-m="up">Sign up</div></div>
+    <input id="lemail" type="email" placeholder="Email" autocomplete="off">
+    <div class="pw">
+      <input id="lpass" type="password" placeholder="Password" autocomplete="off">
+      <div id="leye"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/><path id="lslash" d="M3 3l18 18" style="display:none"/></svg></div>
+    </div>
+    <input id="lpass2" type="password" placeholder="Repeat password" autocomplete="off" style="display:none">
+    <div class="go" id="lgo">Sign in</div>
+    <div id="lerr"></div>
+  </div>
+</div>
+<div id="langscr"><h2>Language</h2><div id="langlist"></div></div>
+<div id="gate"><h2>No network</h2><div id="gwait">Opening Wi-Fi</div></div>
+<div id="cwait">
+  <div class="pic" id="cwpic"></div>
+  <h2 id="cwtitle">Caroline is getting ready</h2>
+  <div class="sub" id="cwsub">Your assistant is starting. Her setup comes next.</div>
+  <div class="cbar"><div class="cfill" id="cwfill"></div></div>
+  <div class="cmeta"><span id="cwphase">Starting</span><span id="cwpct">3%</span></div>
+</div>
+<div id="panel"><h2>Notifications</h2><div id="plist"></div></div>
+<div id="grid"><div id="content"></div></div>
+<div class="more" id="moreR">&#x25B8;</div>
+<div class="more" id="moreD">&#x25BE;</div>
+<script src="/i18n.js"></script>
+<script src="/osk-bundle.js"></script>
+<script src="/focusframe.js"></script>
+<script>
+let CW = 160, CH = 160;   // a cell: 160 x 160 on the console; on a screen of another shape (a phone) it is stretched, see fitCells()
+const MIN_COLS = 4, MIN_ROWS = 3;
+const PALETTE = ['#00A2ED', '#2D7D9A', '#60A917', '#A4C400', '#F0A30A', '#E51400', '#9F00A7',
+                 '#008A00', '#6A00FF', '#1BA1E2', '#D80073', '#A20025', '#647687', '#3A3A3A'];
+const $ = s => document.querySelector(s);
+const api = (p, body) => fetch('/api' + p, body ? {method: 'POST', body: JSON.stringify(body)} : {}).then(r => r.json());
+
+// input diagnostics (what this page really receives) -> shelld input.log
+const plog = m => fetch('/api/log', {method: 'POST', body: JSON.stringify({msg: 'launcher ' + m})}).catch(() => {});
+addEventListener('keydown', e => plog('keydown key=' + e.key + ' code=' + e.code), true);
+addEventListener('pointerdown', e => plog('pointerdown ' + e.clientX + ',' + e.clientY + ' type=' + e.pointerType), true);
+addEventListener('click', e => plog('click ' + e.clientX + ',' + e.clientY), true);
+
+function hash(s) { let h = 0; for (const c of s) h = (Math.imul(31, h) + c.charCodeAt(0)) | 0; return Math.abs(h); }
+function textColor(hex) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  return 0.299 * r + 0.587 * g + 0.114 * b < 140 ? '#fff' : '#000';
+}
+
+// the cursor is on a cell of the grid, a tile or an empty one: cur = {c, r}; cells holds the grid's elements row by row, tiles the apps' tiles.
+// Where each app stands is the user's: an app is moved by a long press and a drag, or by SELECT, the D-pad and SELECT again (MODE takes it
+// back); the places are kept in the launcher's store as {app id: [column, row]}, and an app that has no place yet takes the first free cell.
+const LONG = 500;   // ms: a long press
+let apps = [], places = {}, at = {}, cols = MIN_COLS, rows = MIN_ROWS, gc = MIN_COLS + 1, gr = MIN_ROWS + 1, cells = [], tiles = [],
+    cur = {c: 0, r: 0}, moving = null, locked = false, loginActive = false;   // moving: {i, from: {c, r}, touch} while an app is carried
+const appAt = (c, r) => at[c + ',' + r] ?? -1;
+
+// cols x rows is the apps' area: up to the rightmost and the lowest app, at least the screen. The grid adds one free column on the right
+// and one free row at the bottom (room to move an app to), so it is never smaller than 5 x 4
+function layout() {
+  const n = apps.length, wide = Math.max(MIN_COLS, Math.ceil(Math.sqrt(n * 1.3))), pos = [];
+  at = {};
+  apps.forEach((a, i) => {
+    const p = places[a.id];
+    if (Array.isArray(p) && p.length === 2 && p.every(v => Number.isInteger(v) && v >= 0 && v < 100) && !((p[0] + ',' + p[1]) in at)) {
+      pos[i] = {c: p[0], r: p[1]}; at[p[0] + ',' + p[1]] = i;
+    }
+  });
+  let k = 0;
+  apps.forEach((a, i) => {
+    if (pos[i]) return;
+    while ((k % wide + ',' + Math.floor(k / wide)) in at) k++;
+    pos[i] = {c: k % wide, r: Math.floor(k / wide)}; at[pos[i].c + ',' + pos[i].r] = i;
+  });
+  cols = Math.max(MIN_COLS, ...pos.map(p => p.c + 1));
+  rows = Math.max(MIN_ROWS, ...pos.map(p => p.r + 1));
+  return pos;
+}
+
+// On a screen that is not the console's 640x480 (a phone) the cells are stretched so that whole tiles fill the grid, 160 px each give or take: no cut tile, no empty strip
+function fitCells() {
+  const g = $('#grid'), w = g.clientWidth, h = g.clientHeight;
+  let cw = 160, ch = 160;
+  if (w > 0 && h > 0 && !(innerWidth === 640 && innerHeight === 480)) { cw = w / Math.max(3, Math.round(w / 160)); ch = h / Math.max(2, Math.round(h / 160)); }
+  if (cw === CW && ch === CH) return false;
+  CW = cw; CH = ch;
+  document.documentElement.style.setProperty('--cw', cw + 'px'); document.documentElement.style.setProperty('--ch', ch + 'px');
+  return true;
+}
+function refit() { if (fitCells() && apps.length) render(); }
+addEventListener('resize', refit);
+
+function render() {
+  fitCells();
+  const n = apps.length, pos = layout();
+  gc = cols + 1; gr = rows + 1;
+  cur = {c: Math.min(cur.c, gc - 1), r: Math.min(cur.r, gr - 1)};
+  const content = $('#content');
+  content.style.width = gc * CW + 'px';
+  content.style.height = gr * CH + 'px';
+  content.innerHTML = ''; cells = []; tiles = [];
+  for (let j = 0; j < gc * gr; j++) {
+    const c = j % gc, r = Math.floor(j / gc), left = c * CW + 'px', top = r * CH + 'px';
+    const i = appAt(c, r), on = c === cur.c && r === cur.r ? ' sel' : '';
+    if (i >= 0 && !(moving && moving.i === i)) {   // the carried app leaves an empty cell behind
+      const a = apps[i], color = PALETTE[hash(a.id) % PALETTE.length];
+      const t = document.createElement('button');
+      t.className = 'tile' + on;
+      t.style.cssText = `left:${left};top:${top};background:${color};color:${textColor(color)}`;
+      if (a.icon) { const im = document.createElement('img'); im.src = a.icon; t.appendChild(im); }
+      else { const g = document.createElement('span'); g.className = 'glyph'; g.textContent = a.name.trim().charAt(0).toUpperCase(); t.appendChild(g); }
+      const l = document.createElement('span'); l.className = 'label'; l.textContent = a.name; t.appendChild(l);
+      if (a.badge) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = a.badge > 99 ? '99+' : a.badge; t.appendChild(b); }
+      t.onclick = () => { if (moving) return; select(c, r); launch(i); };
+      content.appendChild(t); cells.push(t); tiles[i] = t;
+    } else {
+      const e = document.createElement('div');
+      e.className = 'empty' + on;
+      e.style.cssText = `left:${left};top:${top};background:${PALETTE[hash(j + ',' + gc) % PALETTE.length]}`;
+      content.appendChild(e); cells.push(e);
+    }
+  }
+  if (moving) {   // the carried app is drawn over the grid, at the cursor (the D-pad) or under the finger
+    const a = apps[moving.i], color = PALETTE[hash(a.id) % PALETTE.length], t = document.createElement('div');
+    t.className = 'tile lift';
+    t.style.cssText = `left:${cur.c * CW}px;top:${cur.r * CH}px;background:${color};color:${textColor(color)}`;
+    if (a.icon) { const im = document.createElement('img'); im.src = a.icon; t.appendChild(im); }
+    else { const g = document.createElement('span'); g.className = 'glyph'; g.textContent = a.name.trim().charAt(0).toUpperCase(); t.appendChild(g); }
+    const l = document.createElement('span'); l.className = 'label'; l.textContent = a.name; t.appendChild(l);
+    content.appendChild(t); tiles[moving.i] = t;
+  }
+  more();
+  return pos;
+}
+
+// the marks at the right and bottom edges: shown while the grid goes on beyond that edge; a tap scrolls one cell that way
+function more() {
+  const g = $('#grid'), on = g.clientWidth > 0 && g.clientHeight > 0;
+  $('#moreR').style.display = on && g.scrollLeft + g.clientWidth < g.scrollWidth - 1 ? 'flex' : 'none';
+  $('#moreD').style.display = on && g.scrollTop + g.clientHeight < g.scrollHeight - 1 ? 'flex' : 'none';
+}
+$('#grid').addEventListener('scroll', more);
+addEventListener('resize', more);
+new ResizeObserver(() => { more(); refit(); }).observe($('#grid'));   // the grid is hidden and shown again by the panel, the login and the first start
+$('#moreR').addEventListener('click', () => $('#grid').scrollBy({left: CW, behavior: 'smooth'}));
+$('#moreD').addEventListener('click', () => $('#grid').scrollBy({top: CH, behavior: 'smooth'}));
+
+// the cursor's frame only
+function mark(c, r) {
+  const old = cells[cur.r * gc + cur.c]; if (old) old.classList.remove('sel');
+  cur = {c, r}; try { sessionStorage.setItem('cell', c + ',' + r); } catch (e) {}
+  const el = cells[r * gc + c]; if (el) el.classList.add('sel');
+}
+function select(c, r) {
+  mark(c, r);
+  if (moving && !moving.touch) { const t = tiles[moving.i]; t.style.left = c * CW + 'px'; t.style.top = r * CH + 'px'; }
+  reveal();
+}
+
+// scrolls the grid just enough for the cell under the cursor to be whole on the screen
+function reveal() {
+  const g = $('#grid'), x0 = cur.c * CW, y0 = cur.r * CH;
+  let x = g.scrollLeft, y = g.scrollTop;
+  if (x0 < x) x = x0; else if (x0 + CW > x + g.clientWidth) x = x0 + CW - g.clientWidth;
+  if (y0 < y) y = y0; else if (y0 + CH > y + g.clientHeight) y = y0 + CH - g.clientHeight;
+  if (x !== g.scrollLeft || y !== g.scrollTop) g.scrollTo({left: x, top: y, behavior: 'smooth'});
+}
+
+// ---- moving an app: pick it up, put it down on a cell (an app that stands there takes the carried app's old place), or take it back --------
+function pick(c, r, touch) {
+  const i = appAt(c, r);
+  if (i < 0 || moving) return false;
+  moving = {i, from: {c, r}, touch};
+  render(); select(c, r);
+  return true;
+}
+function drop(c, r) {
+  if (!moving) return;
+  const pos = layout(), {i, from} = moving, other = appAt(c, r);
+  places = {};
+  apps.forEach((a, k) => { places[a.id] = [pos[k].c, pos[k].r]; });   // every app keeps the place it has now
+  places[apps[i].id] = [c, r];
+  if (other >= 0 && other !== i) places[apps[other].id] = [from.c, from.r];
+  moving = null;
+  api('/db/set', {key: 'places', value: JSON.stringify(places)}).catch(() => {});
+  render(); select(c, r);
+}
+function cancelMove() {
+  if (!moving) return;
+  const {from} = moving;
+  moving = null; render(); select(from.c, from.r);
+}
+
+async function launch(i) {
+  if (locked || !apps[i]) return;
+  locked = true;
+  const t = tiles[i];
+  if (t) t.classList.add('busy');
+  try { await api('/launch', {id: apps[i].id}); } catch (e) {}
+  setTimeout(() => { locked = false; if (t) t.classList.remove('busy'); }, 1500);
+}
+
+// The touchscreen (the simulated touch arrives as pointer events; WPE does not pan on its own). A drag moves the grid in both directions;
+// a press that did not move still counts as a tap on the tile; a long press on a tile picks the app up: it follows the finger (the grid
+// scrolls when the finger comes near its edge) and goes down on the cell under its middle when the finger is lifted.
+(() => {
+  const g = $('#grid'), EDGE = 36, STEP = 8;
+  let d = null, dragged = false, timer = null, grab = null, fx = 0, fy = 0, auto = 0;
+  g.style.touchAction = 'none';
+  const inGrid = (x, y) => { const b = g.getBoundingClientRect(); return {x: x - b.left + g.scrollLeft, y: y - b.top + g.scrollTop}; };
+  function follow() {   // the carried tile under the finger, the cursor on the cell under its middle
+    const p = inGrid(fx, fy), t = tiles[moving.i];
+    const x = Math.max(0, Math.min(gc * CW - CW, p.x - grab.x)), y = Math.max(0, Math.min(gr * CH - CH, p.y - grab.y));
+    t.style.left = x + 'px'; t.style.top = y + 'px';
+    mark(Math.min(gc - 1, Math.floor((x + CW / 2) / CW)), Math.min(gr - 1, Math.floor((y + CH / 2) / CH)));
+  }
+  function edgeScroll() {   // while the finger is near an edge of the grid, the grid moves that way
+    auto = 0;
+    if (!moving || !moving.touch) return;
+    const b = g.getBoundingClientRect();
+    const dx = fx > b.right - EDGE ? STEP : fx < b.left + EDGE ? -STEP : 0, dy = fy > b.bottom - EDGE ? STEP : fy < b.top + EDGE ? -STEP : 0;
+    if (dx || dy) { g.scrollLeft += dx; g.scrollTop += dy; follow(); }
+    auto = requestAnimationFrame(edgeScroll);
+  }
+  g.addEventListener('pointerdown', e => {
+    d = {x: e.clientX, y: e.clientY, sl: g.scrollLeft, st: g.scrollTop}; dragged = false;
+    clearTimeout(timer);
+    const p = inGrid(e.clientX, e.clientY), c = Math.floor(p.x / CW), r = Math.floor(p.y / CH), id = e.pointerId;
+    if (moving || appAt(c, r) < 0) return;
+    timer = setTimeout(() => {
+      timer = null;
+      if (!d || dragged || !pick(c, r, true)) return;
+      dragged = true;   // the press does not end as a tap (no launch)
+      grab = {x: p.x - c * CW, y: p.y - r * CH}; fx = d.x; fy = d.y;
+      try { g.setPointerCapture(id); } catch (err) {}
+      follow(); auto = requestAnimationFrame(edgeScroll);
+    }, LONG);
+  });
+  g.addEventListener('pointermove', e => {
+    if (!d) return;
+    if (moving && moving.touch) { fx = e.clientX; fy = e.clientY; follow(); return; }
+    const dx = e.clientX - d.x, dy = e.clientY - d.y;
+    if (!dragged && Math.hypot(dx, dy) > 8) { dragged = true; clearTimeout(timer); g.setPointerCapture(e.pointerId); }
+    if (dragged) { g.scrollLeft = d.sl - dx; g.scrollTop = d.st - dy; }
+  });
+  const end = put => () => {
+    d = null; clearTimeout(timer); cancelAnimationFrame(auto);
+    if (moving && moving.touch) put ? drop(cur.c, cur.r) : cancelMove();
+  };
+  g.addEventListener('pointerup', end(true)); g.addEventListener('pointercancel', end(false));
+  g.addEventListener('click', e => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+})();
+
+// the console's buttons reach a page as keys: A Enter, SELECT F2, MODE F3
+addEventListener('keydown', e => {
+  if (loginActive) return;
+  if (!cells.length || (moving && moving.touch)) return;
+  let {c, r} = cur, handled = true;
+  if (e.key === 'ArrowLeft') c--;
+  else if (e.key === 'ArrowRight') c++;
+  else if (e.key === 'ArrowUp') r--;
+  else if (e.key === 'ArrowDown') r++;
+  else if (e.key === 'F2') { e.preventDefault(); moving ? drop(c, r) : pick(c, r, false); return; }
+  else if (e.key === 'F3') { if (moving) { e.preventDefault(); cancelMove(); } return; }
+  else if (e.key === 'Enter') { e.preventDefault(); const i = appAt(c, r); if (i >= 0 && !moving) launch(i); return; }   // an empty cell: nothing
+  else handled = false;
+  if (!handled) return;
+  e.preventDefault();
+  c = Math.min(gc - 1, Math.max(0, c)); r = Math.min(gr - 1, Math.max(0, r));
+  if (c !== cur.c || r !== cur.r) select(c, r); else reveal();
+});
+
+// ---- status bar -------------------------------------------------------------------------------
+function tick() {
+  const d = new Date();
+  $('#clock').textContent = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+async function battery() {
+  try { const p = (await api('/hw')).power; $('#batt').textContent = p.capacity + '%' + (/charg/i.test(p.status) && !/dis/i.test(p.status) ? ' +' : ''); } catch (e) {}
+}
+
+let lastNote = 0, unread = 0, noteTimer = null;
+async function notifications() {
+  try {
+    const r = await api('/notifications?since=' + lastNote);
+    for (const it of r.items) {
+      lastNote = it.id; unread++;
+      const t = $('#ntext'); t.classList.remove('old'); t.classList.toggle('err', it.level === 'error'); t.textContent = '';
+      if (it.vibrate) { const b = $('#bar'); b.classList.remove('flash'); void b.offsetWidth; b.classList.add('flash'); }  // simulator stand-in for the vibration motor
+      if (it.app) { const s = document.createElement('span'); s.className = 'app'; s.textContent = it.app; t.appendChild(s); }
+      t.appendChild(document.createTextNode(it.text));
+      clearTimeout(noteTimer);
+      noteTimer = setTimeout(() => { t.classList.add('old'); unread = 0; $('#ncount').style.display = 'none'; }, 8000);
+    }
+    if (r.items.length && unread > 1) { const c = $('#ncount'); c.textContent = unread; c.style.display = 'inline-block'; }
+    lastNote = Math.max(lastNote, r.last);
+    $('#dnd').style.display = r.dnd ? 'inline-block' : 'none';
+    if (panelOpen) await panelLoad();   // what an app or Caroline cleared meanwhile goes away from the open panel
+  } catch (e) {}
+}
+
+// ---- the notification panel: the list, do-not-disturb, clear all; the launcher's side of Platform.notifications -----------------
+let panelOpen = false, pitems = [], pdnd = false, psel = 0, prows = [];
+async function panelLoad() {
+  const r = await api('/notifications/list');
+  pitems = r.items; pdnd = r.dnd; panelRender();
+}
+function panelRender() {
+  prows = [{k: 'dnd'}, {k: 'clear'}].concat(pitems.map(n => ({k: 'item', n})));
+  psel = Math.max(0, Math.min(psel, prows.length - 1));
+  const list = $('#plist'); list.innerHTML = '';
+  prows.forEach((r, i) => {
+    const d = document.createElement('div'); d.className = 'prow' + (i === psel ? ' sel' : '');
+    if (r.k === 'dnd') { d.textContent = I18N.t('Do not disturb') + ': ' + I18N.t(pdnd ? 'on' : 'off'); }
+    else if (r.k === 'clear') { d.textContent = I18N.t('Clear all'); }
+    else {
+      d.classList.add('item'); if (!r.n.read) d.classList.add('unread'); if (r.n.level === 'error') d.classList.add('err');
+      const t = document.createElement('span'); t.className = 'ptext';
+      if (r.n.app) { const a = document.createElement('span'); a.className = 'papp'; a.textContent = r.n.app; a.setAttribute('translate', 'no'); t.appendChild(a); }
+      t.appendChild(document.createTextNode(r.n.text)); t.setAttribute('translate', 'no');
+      const at = document.createElement('span'); at.className = 'pat'; at.textContent = r.n.at || '';
+      const x = document.createElement('span'); x.className = 'px'; x.textContent = '×';
+      x.onclick = e => { e.stopPropagation(); psel = i; panelDismiss(); };
+      d.append(t, at, x);
+    }
+    d.onclick = () => { psel = i; panelAct(); };
+    list.appendChild(d);
+  });
+  if (!pitems.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = I18N.t('No notifications'); list.appendChild(e); }
+  const c = list.children[psel]; if (c && c.scrollIntoView) c.scrollIntoView({block: 'nearest'});
+}
+async function panelShow(on) {
+  if (loginActive && on) return;
+  panelOpen = on;
+  $('#panel').style.display = on ? 'flex' : 'none'; $('#grid').style.display = on ? 'none' : '';
+  if (on) { psel = 0; await panelLoad(); api('/notifications/read', {}); }
+  else { $('#ncount').style.display = 'none'; unread = 0; }
+}
+async function panelAct() {
+  const r = prows[psel]; if (!r) return;
+  if (r.k === 'dnd') { await api('/notifications/dnd', {on: !pdnd}); }
+  else if (r.k === 'clear') { await api('/notifications/clear', {}); psel = 0; }
+  else {  // opens the app the notification came from (when it is on the launcher) and takes the notification away
+    await api('/notifications/dismiss', {id: r.n.id});
+    const who = (r.n.app || '').toLowerCase(), i = apps.findIndex(a => a.id === who || a.name.toLowerCase() === who);   // (Clock and Calendar name themselves with a capital)
+    if (i >= 0) { panelShow(false); launch(i); return; }
+  }
+  await panelLoad();
+}
+async function panelDismiss() {
+  const r = prows[psel]; if (!r || r.k !== 'item') return;
+  await api('/notifications/dismiss', {id: r.n.id}); await panelLoad();
+}
+(() => {   // a long press on the bar opens and closes the panel
+  const n = $('#notes'); let t = null;
+  const stop = () => { clearTimeout(t); t = null; };
+  n.addEventListener('pointerdown', () => { stop(); t = setTimeout(() => { t = null; if (!moving) panelShow(!panelOpen); }, LONG); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(k => n.addEventListener(k, stop));
+})();
+addEventListener('keydown', e => {   // R1 opens and closes the panel; inside: D-pad, A / Enter acts, X takes one notification away, B closes
+  if (loginActive) return;
+  // (the console's buttons reach a page as keys: A Enter, B Escape, X space, R1 PageDown)
+  if (e.key === 'PageDown') { e.preventDefault(); if (!moving) panelShow(!panelOpen); return; }
+  if (!panelOpen) return;
+  e.stopImmediatePropagation();
+  if (e.key === 'ArrowUp') psel = Math.max(0, psel - 1);
+  else if (e.key === 'ArrowDown') psel = Math.min(prows.length - 1, psel + 1);
+  else if (e.key === 'Enter') { e.preventDefault(); panelAct(); return; }
+  else if (e.key === ' ') { e.preventDefault(); panelDismiss(); return; }
+  else if (e.key === 'Escape') { e.preventDefault(); panelShow(false); return; }
+  else return;
+  e.preventDefault(); panelRender();
+}, true);
+
+// ---- first-start login (the account is shared with Caroline): the tab Sign in, or Sign up for a new account (then the very same login) ----------------
+const loginMsg = {network: 'No network', config: 'Login key is not configured', exists: 'This email already has an account'};
+let lmode = 'in', lsel = 1, onEye = false;  // lmode: the tab ('in', 'up'); lsel: the row of lrows() (0: the tabs); onEye: the show-password eye next to the password field
+const lrows = () => [$('#ltabs'), $('#lemail'), $('#lpass'), ...(lmode === 'up' ? [$('#lpass2')] : []), $('#lgo')];
+function showLogin() {
+  loginActive = true; $('#grid').style.display = 'none'; $('#login').style.display = 'flex'; lmark();
+}
+function lmark() {
+  [$('#ltabs'), $('#lemail'), $('#lpass'), $('#lpass2'), $('#lgo')].forEach(el => el.classList.toggle('sel', !onEye && el === lrows()[lsel]));
+  $('#leye').classList.toggle('sel', onEye);
+}
+function setMode(m) {
+  if (m === lmode) return;
+  lmode = m; lsay('');
+  document.querySelectorAll('#ltabs .ltab').forEach(t => t.classList.toggle('on', t.dataset.m === m));
+  $('#lpass2').style.display = m === 'up' ? '' : 'none'; $('#lpass2').value = '';
+  $('#lgo').textContent = I18N.t(m === 'up' ? 'Create account' : 'Sign in');
+  lsel = Math.min(lsel, lrows().length - 1); lmark();
+}
+document.querySelectorAll('#ltabs .ltab').forEach(t => t.onclick = () => { lsel = 0; onEye = false; setMode(t.dataset.m); lmark(); });
+function toggleEye() {  // both password fields at once
+  const show = $('#lpass').type === 'password';
+  $('#lpass').type = $('#lpass2').type = show ? 'text' : 'password';
+  $('#lslash').style.display = show ? '' : 'none';
+}
+// the eye must not take the focus away from the field (that would close the keyboard)
+$('#leye').addEventListener('mousedown', e => e.preventDefault());
+$('#leye').addEventListener('pointerdown', e => e.preventDefault());
+$('#leye').addEventListener('click', toggleEye);
+// what the login says is never under the on-screen keyboard: the field gives up the focus first (that closes the keyboard), and the line is scrolled into view
+function lsay(t) { $('#lerr').textContent = t; $('#lerr').scrollIntoView({block: 'nearest'}); }
+async function doLogin() {
+  const a = document.activeElement; if (a && a !== document.body && a.blur) a.blur();
+  const up = lmode === 'up', email = $('#lemail').value.trim(), password = $('#lpass').value;
+  if (!email || !password) return lsay('Enter email and password');
+  if (up && password.length < 6) return lsay('The password needs at least 6 characters');   // the rule of the SquirrelWisdom sign-up page
+  if (up && password !== $('#lpass2').value) return lsay('The passwords do not match');
+  lsay(up ? 'Creating the account…' : 'Signing in…');
+  try {
+    const r = await fetch(up ? '/api/auth/signup' : '/api/auth/login', {method: 'POST', body: JSON.stringify({email, password})}), j = await r.json();
+    if (!r.ok) return lsay(loginMsg[j.kind] || j.error || (up ? 'Sign-up failed' : 'Login failed'));
+    wizardNext = !!j.wizard;
+  } catch (e) { return lsay('No network'); }
+  $('#login').style.display = 'none'; $('#lpass').value = $('#lpass2').value = '';
+  if (wizardNext) return carolineWait();   // her start wizard comes next: a wait screen, not the launcher, until it takes the window
+  loginActive = false; $('#grid').style.display = '';
+  startLauncher();
+}
+$('#lgo').onclick = doLogin;
+['#lemail', '#lpass', '#lpass2'].forEach(id => $(id).addEventListener('focus', () => { lsel = lrows().indexOf($(id)); onEye = false; lmark(); $(id).scrollIntoView({block: 'nearest'}); }));
+$('#lemail').addEventListener('keydown', e => { if (e.key === 'Enter' && !onEye) { e.preventDefault(); $('#lpass').focus(); } });
+$('#lpass').addEventListener('keydown', e => { if (e.key === 'Enter' && !onEye) { e.preventDefault(); if (lmode === 'up') return $('#lpass2').focus(); $('#lpass').blur(); doLogin(); } });
+$('#lpass2').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#lpass2').blur(); doLogin(); } });
+addEventListener('keydown', e => {  // D-pad on the login page (while the keyboard is open it owns the keys)
+  if (!loginActive || e.defaultPrevented) return;   // (a field's own Enter: the password's signs in, and must not put the focus back into it)
+  const rows = lrows(), el = rows[lsel];
+  if (e.key === 'ArrowUp') { onEye = false; lsel = Math.max(0, lsel - 1); }
+  else if (e.key === 'ArrowDown') { onEye = false; lsel = Math.min(rows.length - 1, lsel + 1); }
+  else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && lsel === 0) setMode(e.key === 'ArrowLeft' ? 'in' : 'up');   // the tabs
+  else if (e.key === 'ArrowRight' && el === $('#lpass')) onEye = true;
+  else if (e.key === 'ArrowLeft' && onEye) onEye = false;
+  else if (e.key === 'Enter') { e.preventDefault(); if (onEye) return toggleEye(); if (lsel === 0) { lsel = 1; return lmark(); } return el === $('#lgo') ? doLogin() : el.focus(); }
+  else return;
+  e.preventDefault(); lmark();
+});
+
+// ---- after a login: Caroline starts and her start wizard comes next (decided at once by shelld from her wizard.json). The launcher is not shown in between, so the
+// wizard never comes over the user's work; it takes the window when her backend answers (shelld's wizard watcher). If she does not come up, the launcher comes after all.
+let wizardNext = false;
+const BULB = '<svg viewBox="0 0 64 64" fill="none" stroke="#f2a900" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M32 6a18 18 0 0 0-10 33c2 1.5 3 3.5 3 6v3h14v-3c0-2.5 1-4.5 3-6A18 18 0 0 0 32 6z"/><path d="M25 54h14M27 59h10"/><path d="M32 22v10M26 28h12" stroke-width="2.5"/></svg>';
+async function carolineWait() {
+  loginActive = true; $('#grid').style.display = 'none'; $('#cwait').style.display = 'flex';
+  let w = {};
+  try { w = await api('/wizard/pending'); } catch (e) {}
+  $('#cwpic').innerHTML = w.online ? '<img src="/kocour.webp" alt="">' : BULB;   // the mascot is for the online simulator only (docs/brand/mascot.md: not on the device)
+  const who = (w.assistant && w.assistant.name) || 'Caroline';   // the assistant of this build (her words stay hers; another one's: its name, its sign-in)
+  if (w.assistant && w.assistant.id !== 'caroline') {
+    $('#cwtitle').textContent = I18N.t(who + ' is getting ready');
+    $('#cwsub').textContent = I18N.t('Your assistant is starting. Its sign-in comes next.');
+  }
+  const t0 = Date.now() - 1000 * (w.uptime_s || 0);
+  const draw = phase => {
+    const p = Math.min(95, Math.round(95 * (1 - Math.exp(-(Date.now() - t0) / 20000))));   // her start takes tens of seconds: the bar moves all the time and waits at 95 for the wizard
+    $('#cwfill').style.width = p + '%'; $('#cwpct').textContent = p + '%'; $('#cwphase').textContent = I18N.t(phase);
+  };
+  const anim = setInterval(() => draw(w.running ? 'Waking up ' + who : 'Starting'), 400);
+  const until = Date.now() + 150000;
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1000));
+    try { w = await api('/wizard/pending'); } catch (e) {}
+    if (!w.pending || Date.now() > until) break;   // the wizard took the window (this page is gone then), was not needed after all, or she did not come up
+  }
+  clearInterval(anim);
+  $('#cwait').style.display = 'none'; loginActive = false; $('#grid').style.display = '';
+  startLauncher();
+}
+
+async function startLauncher() {
+  apps = await api('/apps');
+  try { places = JSON.parse((await api('/db/get?key=places')).value || '{}') || {}; } catch (e) {}   // where the user has put the apps
+  // the launcher is a page of the shared window: it comes back with the cell that was selected
+  let s0 = null; try { s0 = (sessionStorage.getItem('cell') || '').split(',').map(Number); } catch (e) {}
+  if (s0 && s0.length === 2 && s0.every(v => Number.isInteger(v) && v >= 0)) cur = {c: s0[0], r: s0[1]};
+  render(); reveal();
+  // a count some app shows on its tile (the unread messages of Communicator): updated in place, the grid is not rebuilt
+  setInterval(async () => {
+    try {
+      const now = await api('/apps');
+      if (moving) return;   // nothing changes under an app that is being moved
+      if (now.length !== apps.length || now.some((a, i) => a.id !== apps[i].id)) { apps = now; render(); return; }
+      now.forEach((a, i) => {
+        if ((a.badge || 0) === (apps[i].badge || 0)) return;
+        apps[i].badge = a.badge;
+        const old = tiles[i] && tiles[i].querySelector('.badge'); if (old) old.remove();
+        if (a.badge && tiles[i]) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = a.badge > 99 ? '99+' : a.badge; tiles[i].appendChild(b); }
+      });
+    } catch (e) {}
+  }, 3000);
+}
+
+// ---- the system's MessageBox while no app is in the shared window (the welcome gift after a login, a notice of the system): shelld sends it to the launcher's own
+// channel (/appws?id=launcher); drawn as platform.js draws it for an app: ←/→ choose, A (Enter) confirms, B (Escape) cancels
+let sbox = null;
+(function systemBoxes() {
+  let ws;
+  const mk = (tag, css, text) => { const e = document.createElement(tag); e.style.cssText = css; if (text !== undefined) e.textContent = text; return e; };
+  const hide = () => { if (sbox) { sbox.el.remove(); sbox = null; } };
+  const paint = () => sbox.btns.forEach((b, k) => { b.style.background = k === sbox.i ? '#f2a900' : '#2b343c'; b.style.color = k === sbox.i ? '#000' : '#fff'; });
+  const onmessage = e => {
+    let m; try { m = JSON.parse(e.data); } catch (err) { return; }
+    if (m.t === 'msgbox_close') { if (sbox && sbox.id === m.id) hide(); return; }
+    if (m.t !== 'msgbox' || (sbox && sbox.id === m.id)) return;
+    hide();
+    const el = mk('div', 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;font:20px "DejaVu Sans",sans-serif;color:#fff');
+    const card = mk('div', 'width:520px;max-width:92%;background:#1d242b;border:2px solid #f2a900;border-radius:10px;padding:18px 22px;text-align:center');
+    const icons = {info: ['i', '#3b82f6'], question: ['?', '#f2a900'], warning: ['!', '#f2a900'], error: ['×', '#e5484d']};
+    if (icons[m.icon]) card.appendChild(mk('div', 'width:46px;height:46px;line-height:46px;margin:0 auto 8px;border-radius:50%;font-size:30px;font-weight:bold;color:#000;background:' + icons[m.icon][1], icons[m.icon][0]));
+    if (m.title) card.appendChild(mk('div', 'font-size:24px;font-weight:bold;color:#f2a900;margin-bottom:8px', I18N.t(m.title)));
+    if (m.text) card.appendChild(mk('div', 'font-size:20px;line-height:1.35;margin-bottom:16px;white-space:pre-wrap', m.text));
+    const row = mk('div', 'display:flex;gap:12px;justify-content:center');
+    sbox = {id: m.id, el, i: m.default || 0, n: m.buttons.length, btns: m.buttons.map((b, k) => { const d = row.appendChild(mk('div', 'min-width:96px;padding:10px 18px;border-radius:6px', I18N.t(b))); d.onclick = () => answer(k); return d; })};
+    card.appendChild(row); el.appendChild(card); document.body.appendChild(el); paint();
+  };
+  const answer = index => { const b = sbox; hide(); try { ws.send(JSON.stringify({t: 'msgbox_result', id: b.id, index})); } catch (err) {} };
+  addEventListener('keydown', e => {   // while a box is up the launcher hears nothing else
+    if (!sbox) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (e.key === 'ArrowLeft') { sbox.i = Math.max(0, sbox.i - 1); paint(); }
+    else if (e.key === 'ArrowRight') { sbox.i = Math.min(sbox.n - 1, sbox.i + 1); paint(); }
+    else if (e.key === 'Enter') answer(sbox.i);
+    else if (e.key === 'Escape') answer(-1);
+  }, true);
+  const connect = () => { ws = new WebSocket(`ws://${location.host}/appws?id=launcher`); ws.onmessage = onmessage; ws.onclose = () => setTimeout(connect, 1000); };
+  connect();
+})();
+
+(async () => {
+  OSK.attach();
+  tick(); battery(); notifications();
+  setInterval(tick, 5000); setInterval(battery, 5000); setInterval(notifications, 1500);
+  // a language chosen in Settings shows up here as soon as the user is back: the launcher reloads itself
+  setInterval(async () => { try { const s = await api('/settings'); if ((s.language || 'en') !== I18N.lang) location.reload(); } catch (e) {} }, 2000);
+  const a = await api('/auth/status'), st = await api('/settings');
+  if (a.logged_in) { let w = {}; try { w = await api('/wizard/pending'); } catch (e) {} if (w.pending) carolineWait(); else startLauncher(); }
+  else if (!st.language) showLanguageScreen();   // first start: the language comes before everything else
+  else gateNetwork();
+})();
+
+// ---- first start: choose the interface language (and with it the typical keyboard layout) ---------------------------
+async function showLanguageScreen() {
+  loginActive = true;   // the tile navigation stays off
+  $('#grid').style.display = 'none'; $('#langscr').style.display = 'flex';
+  const langs = await (await fetch('/i18n/languages.json')).json();
+  let ls = 0;
+  const list = $('#langlist');
+  function draw() {
+    list.innerHTML = '';
+    langs.forEach((l, i) => {
+      const d = document.createElement('div'); d.className = 'lrow' + (i === ls ? ' sel' : '');
+      d.textContent = l.name; d.setAttribute('translate', 'no');
+      d.onclick = () => { ls = i; choose(); };
+      list.appendChild(d);
+    });
+    const c = list.children[ls]; if (c && c.scrollIntoView) c.scrollIntoView({block: 'nearest'});
+  }
+  async function choose() {
+    const code = langs[ls].code;
+    await fetch('/api/settings/set', {method: 'POST', body: JSON.stringify({key: 'layouts', value: code === 'en' ? ['en'] : ['en', code]})});
+    await fetch('/api/settings/set', {method: 'POST', body: JSON.stringify({key: 'language', value: code})});
+    location.reload();   // the page comes back in the chosen language and goes on to the network
+  }
+  addEventListener('keydown', e => {
+    if (e.key === 'ArrowUp') ls = Math.max(0, ls - 1);
+    else if (e.key === 'ArrowDown') ls = Math.min(langs.length - 1, ls + 1);
+    else if (e.key === 'Enter') { e.preventDefault(); choose(); return; }
+    else return;
+    e.preventDefault(); draw();
+  });
+  let d = null, dragged = false;
+  list.addEventListener('pointerdown', e => { d = {y: e.clientY, st: list.scrollTop}; dragged = false; });
+  list.addEventListener('pointermove', e => { if (!d) return; const dy = e.clientY - d.y; if (!dragged && Math.abs(dy) > 8) { dragged = true; list.setPointerCapture(e.pointerId); } if (dragged) list.scrollTop = d.st - dy; });
+  list.addEventListener('pointerup', () => { d = null; }); list.addEventListener('pointercancel', () => { d = null; });
+  list.addEventListener('click', e => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+  draw();
+}
+
+// First start: the login needs the network. Without one the Wi-Fi app takes the shared window (this page is replaced; the app cannot be
+// left with MODE); when it closes itself after connecting, the launcher loads again and finds the network, and the login screen is what stays.
+let gating = false;
+async function gateNetwork() {
+  gating = true; $('#grid').style.display = 'none'; $('#gate').style.display = 'flex';
+  let dots = 0;
+  const anim = setInterval(() => { $('#gwait').textContent = I18N.t('Opening Wi-Fi') + '.'.repeat(dots++ % 4); }, 400);
+  for (;;) {
+    const n = await api('/net/status');
+    if (n.online) break;
+    try { await api('/launch', {id: 'wifi'}); } catch (e) {}   // already in the window: nothing happens
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  clearInterval(anim);
+  gating = false; $('#gate').style.display = 'none';
+  showLogin();
+}
+</script>
+</body>
+</html>

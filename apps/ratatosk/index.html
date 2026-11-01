@@ -1,0 +1,713 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Ratatosk</title>
+<meta name="viewport" content="width=640,height=480">
+<!--
+  Attachments (stage 5): a thumbnail and a line per attachment in a message; A on a message opens the menu, which starts with Open / Save for each attachment
+  (a picture opens full screen, B or A close it, the cursor keys go to the next picture; a sound or a video is handed to Music / Video; any other file is saved to
+  Downloads/Ratatosk/); the "Attach a file" row above the message field (A) picks a file of the card and sends it with the typed text as its caption.
+  Ratatosk (docs/usage.md), stage 1: the sign-in and the list of chats. The backend is runtime/ratatosk.py (/api/rt/*).
+  Keys: only the cursor keys, A (Enter) and B (Escape); MODE leaves the app, as everywhere. Sign-in: Up / Down between the fields and the button,
+  A on a field opens the on-screen keyboard (Enter in the field goes on). The list: Up / Down, A opens a chat (stage 4: not yet), the last row signs out.
+  The app has no state of its own to keep but the row it stood on (Platform.state).
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #head { flex: none; height: 40px; line-height: 40px; padding: 0 14px; background: #000; color: #f2a900; font-size: 20px; font-weight: bold; display: flex; gap: 10px; }
+  #head .t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #head .s { flex: none; font-size: 14px; font-weight: normal; color: #8a949e; align-self: center; }
+  #head .s.bad { color: #ff9b6b; }
+  .screen { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .screen.on { display: flex; }
+  #list { overflow: auto; touch-action: none; }
+  .row { height: 56px; padding: 0 14px; display: flex; align-items: center; gap: 12px; font-size: 21px; border-bottom: 1px solid #1d242b; }
+  .row.sel { background: #f2a900; color: #000; }
+  .row .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .when { flex: none; font-size: 14px; opacity: .65; }
+  .row .badge { flex: none; min-width: 26px; height: 26px; border-radius: 13px; background: #f2a900; color: #000; font-size: 15px; font-weight: bold; text-align: center; line-height: 26px; padding: 0 7px; }
+  .row.sel .badge { background: #000; color: #f2a900; }
+  .row .grp { flex: none; font-size: 13px; opacity: .6; }
+  .row.out { color: #ff9b6b; margin-top: 8px; }
+  .row.out.sel { color: #000; }
+  .form { padding: 18px 24px; gap: 14px; justify-content: flex-start; }
+  .form label { font-size: 15px; color: #8a949e; display: block; margin-bottom: 4px; }
+  .form input { width: 100%; height: 50px; font-size: 22px; padding: 0 12px; border-radius: 8px; border: 3px solid #2d3640; background: #1d242b; color: #fff; -webkit-user-select: text; user-select: text; }
+  .form .f.sel input { border-color: #f2a900; }
+  .form .go { height: 54px; border-radius: 10px; background: #232b33; color: #fff; font-size: 22px; display: flex; align-items: center; justify-content: center; border: 3px solid transparent; }
+  .form .go.sel { background: #f2a900; color: #000; }
+  .big { padding: 28px 26px; font-size: 19px; line-height: 1.45; color: #cfd6dc; }
+  .big code { color: #f2a900; font-size: 16px; word-break: break-all; }
+  #msgs { flex: 1; min-height: 0; overflow: auto; touch-action: none; padding: 6px 8px; }
+  .m { margin: 5px 0; padding: 5px 10px 3px; border-radius: 10px; max-width: 88%; background: #1d242b; font-size: 18px; line-height: 1.3; overflow-wrap: anywhere; border: 3px solid transparent; }
+  .m.mine { margin-left: auto; background: #2d3a22; }
+  .m.sel { border-color: #f2a900; }
+  .m .who { font-size: 13px; color: #8cf; }
+  .m .rp { font-size: 14px; color: #9aa4ad; border-left: 3px solid #f2a900; padding-left: 6px; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m .tm { font-size: 12px; color: #8a949e; text-align: right; }
+  .m .att { font-size: 14px; color: #f2a900; }
+  .m .rx { font-size: 15px; }
+  #ctx { flex: none; font-size: 14px; color: #f2a900; padding: 0 12px; min-height: 0; }
+  #attachbar { flex: none; height: 34px; margin: 2px 8px 0; border-radius: 8px; background: #1d242b; color: #cfd6dc; font-size: 16px; display: flex; align-items: center; justify-content: center; border: 3px solid transparent; }
+  #attachbar.sel { border-color: #f2a900; }
+  .m .th { display: block; max-width: 100%; max-height: 110px; border-radius: 6px; margin: 4px 0 2px; background: #0b0f13; }
+  .m .att { margin: 2px 0; }
+  #viewer { position: fixed; inset: 0; background: #000; z-index: 15; display: none; align-items: center; justify-content: center; }
+  #viewer.on { display: flex; }
+  #v-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  #v-cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 12px; background: #000a; color: #cfd6dc; font-size: 15px; text-align: center; }
+  #composer { flex: none; display: flex; gap: 8px; padding: 4px 6px; background: #000; border: 3px solid transparent; }
+  #composer.sel { border-color: #f2a900; }
+  #compose { flex: 1; min-width: 0; height: 44px; font-size: 20px; padding: 0 10px; border-radius: 8px; border: 2px solid #2d3640; background: #1d242b; color: #fff; -webkit-user-select: text; user-select: text; }
+  #sendbtn { flex: none; width: 92px; height: 44px; border-radius: 8px; background: #f2a900; color: #000; font-size: 19px; display: flex; align-items: center; justify-content: center; }
+  #actions { position: fixed; inset: 0; background: #000b; display: none; align-items: center; justify-content: center; z-index: 10; }
+  #actions.on { display: flex; }
+  #abox { width: 380px; background: #1d242b; border-radius: 8px; padding: 6px 0; }
+  #abox .row { height: 52px; }
+  #abox .hd { padding: 6px 14px; font-size: 15px; color: #8a949e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #callbar { flex: none; height: 44px; margin: 4px 8px 0; border-radius: 8px; background: #1d242b; color: #7fd18b; font-size: 19px; display: flex; align-items: stretch; justify-content: center; border: 3px solid transparent; }
+  #callbar.sel { border-color: #f2a900; }
+  #callbar .cb { flex: 1; display: flex; align-items: center; justify-content: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; }
+  #callbar .cb + .cb { border-left: 2px solid #0b0f13; flex: none; width: 150px; }
+  #c-tiles { position: absolute; inset: 0; background: #000; display: none; gap: 2px; }
+  #c-tiles.n1 { grid-template-columns: 1fr; }
+  #c-tiles.n2 { grid-template-columns: 1fr 1fr; }
+  #c-tiles.n3, #c-tiles.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  #c-tiles .tile { position: relative; overflow: hidden; background: #000; min-height: 0; }
+  #c-tiles .tile img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #c-tiles .tile .nm { position: absolute; left: 6px; bottom: 4px; font-size: 14px; color: #fff; text-shadow: 0 0 4px #000, 0 0 2px #000; }
+  #call .people { font-size: 16px; color: #cfd6dc; max-width: 92%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #call.vid .people { position: relative; z-index: 1; font-size: 13px; text-shadow: 0 0 4px #000; }
+  .rlist { overflow: auto; touch-action: none; }
+  .row.newchat { color: #7fd18b; }
+  .row.newchat.sel { color: #000; }
+  .row.dim .name { opacity: .6; }
+  .row .sub { flex: none; font-size: 14px; opacity: .7; max-width: 45%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row.danger { color: #ff9b6b; }
+  .row.danger.sel { color: #000; }
+  #infobar { flex: none; height: 34px; margin: 2px 8px 0; border-radius: 8px; background: #1d242b; color: #8cf; font-size: 16px; display: none; align-items: center; justify-content: center; border: 3px solid transparent; }
+  #infobar.sel { border-color: #f2a900; }
+  #form { position: fixed; inset: 0; background: #000c; display: none; align-items: flex-start; justify-content: center; z-index: 12; padding-top: 40px; }
+  #form.on { display: flex; }
+  #fbox { width: 520px; max-width: 94%; background: #1d242b; border-radius: 8px; padding: 14px; }
+  #f-title { font-size: 20px; color: #f2a900; margin-bottom: 8px; }
+  #f-in { width: 100%; height: 46px; font-size: 21px; padding: 0 10px; border-radius: 8px; border: 3px solid #f2a900; background: #111; color: #fff; -webkit-user-select: text; user-select: text; }
+  #f-hint { font-size: 14px; color: #8a949e; margin-top: 6px; }
+  #joinbar { flex: none; height: 40px; margin: 2px 8px 0; border-radius: 8px; background: #1b5e20; color: #cfeccf; font-size: 16px; display: none; align-items: center; padding: 0 12px; gap: 10px; border: 3px solid transparent; }
+  #joinbar.on { display: flex; }
+  #joinbar.sel { border-color: #f2a900; }
+  #joinbar .jt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #joinbar .jb { flex: none; color: #69f0ae; font-weight: bold; }
+  #c-me { position: absolute; right: 10px; top: 10px; width: 128px; height: 96px; object-fit: cover; border: 2px solid #f2a900; border-radius: 6px; background: #000; display: none; z-index: 2; }
+  #call.vid { justify-content: flex-start; padding: 10px; gap: 4px; }
+  #call.vid .who, #call.vid .st, #call.vid .hint, #call.vid .btns { position: relative; z-index: 1; text-shadow: 0 0 5px #000, 0 0 3px #000; }
+  #call.vid .who { font-size: 22px; max-width: 70%; } #call.vid .st { font-size: 17px; } #call.vid .lv { display: none; } #call.vid .btns { margin-top: auto; gap: 10px; }
+  #call.vid .hint { font-size: 13px; color: #cfd6dc; }
+  #call.vid .btn { min-width: 110px; height: 56px; font-size: 18px; background: #232b33dd; }
+  #call.vid .btn.ok { background: #2e7d46dd; } #call.vid .btn.no { background: #a43a2add; }
+  #call { position: fixed; inset: 0; background: #0b0f13; z-index: 20; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 20px; }
+  #call.on { display: flex; }
+  #call .who { font-size: 34px; font-weight: bold; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #call .st { font-size: 22px; color: #f2a900; }
+  #call .st.bad { color: #ff9b6b; }
+  #call .lv { width: 300px; height: 12px; background: #1d242b; border-radius: 6px; overflow: hidden; }
+  #call .lv i { display: block; height: 100%; width: 0; background: #7fd18b; transition: width .3s; }
+  #call .btns { display: flex; gap: 18px; margin-top: 10px; }
+  #call .btn { min-width: 150px; height: 64px; border-radius: 12px; background: #232b33; font-size: 21px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  #call .btn.ok { background: #2e7d46; }
+  #call .btn.no { background: #a43a2a; }
+  #call .hint { font-size: 15px; color: #8a949e; }
+  #msg { flex: none; min-height: 28px; padding: 2px 14px 6px; font-size: 16px; color: #ff9b6b; }
+  #foot { flex: none; height: 26px; line-height: 26px; padding: 0 14px; background: #1d242b; color: #aab; font-size: 14px; white-space: nowrap; overflow: hidden; }
+</style>
+<div id="head"><span class="t">Ratatosk</span><span class="s" id="stat"></span></div>
+
+<div id="s-setup" class="screen big">
+  This console does not have the key of the Ratatosk server yet, so it cannot sign in.<br><br>
+  Put it in the file<br><code id="keypath">~/.intellicat/data/ratatosk/site_key</code><br>
+  (one line, the same value the phone app carries) and open the app again.
+</div>
+
+<div id="s-signin" class="screen form">
+  <div class="f" id="f-email"><label for="email">Email</label><input id="email" type="email" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+  <div class="f" id="f-pass"><label for="pass">Password</label><input id="pass" type="password" autocomplete="off"></div>
+  <div class="go" id="go">Sign in</div>
+</div>
+
+<div id="s-list" class="screen"><div id="list"></div></div>
+
+<div id="s-chat" class="screen">
+  <div id="callbar">Call</div>
+  <div id="joinbar"><span class="jt" id="join-t"></span><span class="jb">Join</span></div>
+  <div id="infobar">Group: members and settings</div>
+  <div id="msgs"></div>
+  <div id="ctx"></div>
+  <div id="attachbar">Attach a file</div>
+  <div id="composer"><input id="compose" type="text" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="Message"><div id="sendbtn">Send</div></div>
+</div>
+<div id="s-info" class="screen"><div id="ilist" class="rlist"></div></div>
+<div id="s-pick" class="screen"><div id="plist" class="rlist"></div></div>
+<div id="form"><div id="fbox"><div id="f-title"></div><input id="f-in" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"><div id="f-hint"></div></div></div>
+<div id="actions"><div id="abox"></div></div>
+<div id="viewer"><img id="v-img" alt=""><div id="v-cap"></div></div>
+<div id="call"><div id="c-tiles"></div><img id="c-me" alt=""><div class="who" id="c-who"></div><div class="st" id="c-st"></div><div class="people" id="c-people"></div><div class="lv" id="c-lv"><i></i></div><div class="btns" id="c-btns"></div><div class="hint" id="c-hint"></div></div>
+
+<div id="msg"></div>
+<div id="foot"></div>
+<script src="/platform.js"></script>
+<script>
+  const $ = s => document.querySelector(s);
+  const T = s => Platform.t(s);
+  let status = null, chats = [], screen = 'signin', sel = 0, busy = false, typing = false;
+  let ongoing = null;   // the call going on in the open chat that this device is not in (the banner "Call in progress ... Join"), from the server's record
+  let chat = null, act = null, reply = null, editing = null, listSel = 0;   // the open chat {chat, messages, me}; the actions menu; what the next message answers / replaces
+
+  const api = async (path, body) => {
+    const r = await fetch('/api/rt/' + path, body ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)} : {});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(j.error || ('error ' + r.status)); e.code = j.code; throw e; }
+    return j;
+  };
+  function say(t) { $('#msg').textContent = t || ''; }
+
+  // a time as the lists of the phone show it: today the hour, else the day
+  function when(ts) {
+    if (!ts) return '';
+    const d = new Date(ts < 1e12 ? ts * 1000 : ts), now = new Date(), p = n => String(n).padStart(2, '0');
+    return d.toDateString() === now.toDateString() ? p(d.getHours()) + ':' + p(d.getMinutes()) : p(d.getDate()) + '.' + p(d.getMonth() + 1);
+  }
+
+  function show(name) {
+    screen = name;
+    for (const s of ['setup', 'signin', 'list', 'chat', 'info', 'pick']) $('#s-' + s).classList.toggle('on', s === name);
+    draw();
+  }
+
+  function rows() {   // what the cursor can stand on
+    if (screen === 'signin') return ['email', 'pass', 'go'];
+    if (screen === 'list') return chats.map(c => ({chat: c})).concat([{newchat: true}, {out: true}]);
+    if (screen === 'chat' && chat) return [{call: true}].concat(ongoing ? [{join: true}] : [], chat.chat.is_group ? [{info: true}] : [], chat.messages.map(m => ({m})), [{attach: true}, {composer: true}]);
+    if (screen === 'info' && info) return infoRows();
+    if (screen === 'pick' && pick) return pick.items;
+    return [];
+  }
+
+  const short = email => (email || '').split('@')[0];
+  function drawChat(rs) {
+    $('#head .t').textContent = chat.chat.name;
+    const l = $('#msgs'); l.innerHTML = '';
+    rs.forEach((r, i) => {
+      if (!r.m) return;
+      const m = r.m, d = document.createElement('div');
+      d.className = 'm' + (m.mine ? ' mine' : '') + (i === sel && !act ? ' sel' : ''); d.dataset.row = i;
+      if (!m.mine && chat.chat.is_group) { const w = document.createElement('div'); w.className = 'who'; w.textContent = short(m.from); d.appendChild(w); }
+      if (m.reply) { const p = document.createElement('div'); p.className = 'rp'; p.textContent = short(m.reply.from) + (m.reply.from ? ': ' : '') + (m.reply.text || ''); d.appendChild(p); }
+      const t = document.createElement('div'); t.textContent = m.text; d.appendChild(t);
+      for (const a of (m.attachments || [])) {    // a thumbnail where there is one (decrypted by the console, fetched once), and a line with the kind, the name and the size
+        if (a.type === 'image' && a.thumb) { const im = document.createElement('img'); im.className = 'th'; im.alt = ''; thumbInto(im, m.id, a.i); d.appendChild(im); }
+        const x = document.createElement('div'); x.className = 'att'; x.textContent = '[' + T(a.type) + '] ' + a.name + (a.size ? '  ' + sizeText(a.size) : ''); d.appendChild(x);
+      }
+      const rx = Object.entries(m.reactions || {}).filter(([, v]) => v.length); if (rx.length) { const x = document.createElement('div'); x.className = 'rx'; x.textContent = rx.map(([e, v]) => e + (v.length > 1 ? v.length : '')).join(' '); d.appendChild(x); }
+      const tm = document.createElement('div'); tm.className = 'tm'; tm.textContent = (m.edited ? T('edited') + '  ' : '') + when(m.ts); d.appendChild(tm);
+      d.onclick = () => { sel = i; draw(); activate(); };
+      l.appendChild(d);
+    });
+    $('#composer').classList.toggle('sel', sel === rs.length - 1 && !act);
+    $('#attachbar').classList.toggle('sel', sel === rs.length - 2 && !act); $('#attachbar').textContent = T('Attach a file'); $('#attachbar').onclick = () => { sel = rs.length - 2; draw(); pickAndSend(); };
+    const jb = $('#joinbar'); jb.classList.toggle('on', !!ongoing); jb.classList.toggle('sel', !!ongoing && sel === 1 && !act);
+    if (ongoing) { $('#join-t').textContent = T(ongoing.mode === 'video' ? 'Video call in progress' : 'Call in progress') + ': ' + (ongoing.participants || []).map(short).join(', '); jb.onclick = () => { sel = 1; draw(); joinCall(); }; }
+    const cb = $('#callbar'); cb.classList.toggle('sel', sel === 0 && !act); cb.innerHTML = '';
+    for (const [label, mode] of [[T('Call') + '  ' + chat.chat.name, 'audio'], [T('Video'), 'video']]) {   // the video call and the camera are touch only until the owner says which button
+      const x = document.createElement('div'); x.className = 'cb'; x.textContent = label; x.onclick = () => { sel = 0; draw(); startCall(mode); }; cb.appendChild(x);
+    }
+    $('#ctx').textContent = editing ? T('Editing the message: Enter saves') : reply ? T('Reply to') + ' ' + short(reply.from) + ': ' + (reply.text || '').slice(0, 40) : '';
+    const c = [...l.children].find(x => +x.dataset.row === sel);   // the row of the cursor (row 0 is the call bar, not in the feed)
+    if (sel >= rs.length - 2) l.scrollTop = l.scrollHeight; else if (c && c.scrollIntoView) c.scrollIntoView({block: 'nearest'});
+    const ib = $('#infobar'); ib.style.display = chat.chat.is_group ? 'flex' : 'none'; ib.classList.toggle('sel', !!rs[sel] && !!rs[sel].info && !act); ib.textContent = T('Group: members and settings'); ib.onclick = () => { sel = rs.findIndex(r => r.info); draw(); openInfo(); };
+    drawAct();
+    const cur = rs[sel] || {};
+    $('#foot').textContent = act ? '↑↓ select  A choose  B close' : cur.call ? '↑↓ select  ◀▶ page  A call  B back' : cur.join ? '↑↓ select  A join the call  B back' : cur.info ? '↑↓ select  A members and settings  B back' : '↑↓ select  ◀▶ page  A open / write  B back';
+  }
+
+  // the menu over the screen (a message's actions, the choices of a list, a confirmation); the cursor keys, A and B work it on every screen
+  function drawAct() {
+    $('#actions').classList.toggle('on', !!act);
+    const b = $('#abox'); b.innerHTML = '';
+    if (act) {
+      const h = document.createElement('div'); h.className = 'hd'; h.textContent = act.title || ''; b.appendChild(h);
+      act.items.forEach((it, i) => {
+        const d = document.createElement('div'); d.className = 'row' + (i === act.sel ? ' sel' : ''); const n = document.createElement('span'); n.className = 'name'; n.textContent = T(it.label); d.appendChild(n);
+        d.onclick = () => { act.sel = i; runAction(); }; b.appendChild(d);
+      });
+    }
+  }
+
+  // Left / Right: a page of the list or the feed. The view scrolls by its height less a margin and the cursor goes to the first row that is
+  // in view (at the very end to the last row, at the very top to the first). The cursor keys, A (Enter) and B (Exit) are free to use; X, Y and the
+  // shoulder buttons are not (owner, 2026-10-28), so the video call and the camera are touch only.
+  function pageMove(dir) {
+    const box = screen === 'chat' ? $('#msgs') : $('#list'), n = rows().length;
+    if (dir > 0 && box.scrollTop + box.clientHeight >= box.scrollHeight - 2) { sel = n - 1; return; }
+    if (dir < 0 && box.scrollTop <= 0) { sel = 0; return; }
+    box.scrollTop += dir * (box.clientHeight - 40);
+    const top = box.getBoundingClientRect().top;
+    const first = [...box.children].find(c => c.dataset.row !== undefined && c.getBoundingClientRect().bottom > top + 4);
+    if (first) sel = +first.dataset.row;
+  }
+
+  async function openChat(id) {
+    try {
+      const r = await api('chat?id=' + encodeURIComponent(id));
+      listSel = sel; chat = r; reply = editing = act = null; ongoing = null; $('#compose').value = ''; say('');
+      screen = 'chat'; show('chat'); sel = rows().length - 1; draw(); pollOngoing();
+    } catch (e) { say(e.message); }
+  }
+  async function reloadChat() {
+    if (!chat || act) return;
+    try {
+      const atEnd = sel >= rows().length - 1, r = await api('chat?id=' + encodeURIComponent(chat.chat.id));
+      chat = r; sel = atEnd ? rows().length - 1 : Math.min(sel, rows().length - 1); draw();
+      if (r.offline) say(T('Offline: the messages shown are the last ones received.'));
+    } catch (e) { say(e.message); }
+  }
+  function leaveChat() { chat = null; act = null; viewer = null; ongoing = null; drawViewer(); dropThumbs(); reply = editing = null; sel = listSel; show('list'); refresh(false); }
+
+  // ---- attachments (stage 5) -----------------------------------------------------------------------------------------------
+  const sizeText = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
+  const thumbs = new Map();                      // message id + position -> an object URL of the decrypted thumbnail (in memory only; revoked when the chat is left)
+  function thumbInto(im, mid, i) {
+    const k = mid + '/' + i;
+    if (thumbs.has(k)) { im.src = thumbs.get(k); return; }
+    fetch('/api/rt/attachment?kind=thumb&id=' + encodeURIComponent(chat.chat.id) + '&msg=' + encodeURIComponent(mid) + '&i=' + i)
+      .then(r => r.ok ? r.blob() : Promise.reject()).then(b => { const u = URL.createObjectURL(b); thumbs.set(k, u); im.src = u; }).catch(() => { im.remove(); });
+  }
+  function dropThumbs() { for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear(); }
+
+  let viewer = null;                             // {list: [{mid, i, name}], at}: the pictures of the chat, shown full screen
+  function pictures() { return chat ? chat.messages.flatMap(m => (m.attachments || []).filter(a => a.type === 'image').map(a => ({mid: m.id, i: a.i, name: a.name}))) : []; }
+  function showPicture(mid, i) {
+    const list = pictures(), at = Math.max(0, list.findIndex(p => p.mid === mid && p.i === i));
+    viewer = {list, at}; drawViewer();
+  }
+  function drawViewer() {
+    $('#viewer').classList.toggle('on', !!viewer);
+    if (!viewer) { $('#v-img').removeAttribute('src'); return; }
+    const p = viewer.list[viewer.at];
+    $('#v-cap').textContent = p.name + '   ' + (viewer.at + 1) + ' / ' + viewer.list.length;
+    $('#v-img').src = '/api/rt/attachment?kind=file&id=' + encodeURIComponent(chat.chat.id) + '&msg=' + encodeURIComponent(p.mid) + '&i=' + p.i + '&t=' + viewer.at;   // decrypted by the console for this one request, never kept
+    $('#v-img').onerror = () => { $('#v-cap').textContent = p.name + '   ' + T('this picture cannot be shown (it is missing or does not authenticate)'); };
+  }
+  async function openAttachment(m, a) {
+    try {
+      if (a.type === 'image') return showPicture(m.id, a.i);
+      say(T('Opening') + ' ' + a.name + '...');
+      const r = await api('attachment-open', {id: chat.chat.id, msg: m.id, i: a.i, mode: a.type === 'file' ? 'save' : 'play'});
+      say(a.type === 'file' ? T('Saved to the card') + ': ' + r.path : '');
+      await Platform.files.open(r.path).catch(() => { if (a.type !== 'file') say(T('No app on this console plays') + ' ' + a.name); });
+    } catch (e) { say(e.message); }
+  }
+  async function saveAttachment(m, a) {
+    try { const r = await api('attachment-open', {id: chat.chat.id, msg: m.id, i: a.i, mode: 'save'}); say(T('Saved to the card') + ': ' + r.path); } catch (e) { say(e.message); }
+  }
+  async function pickAndSend() {
+    if (busy || !chat) return;
+    const r = await Platform.pickFile({ext: ''}).catch(() => null);
+    if (!r || !r.path) return;                   // B at the top of the dialog, or "Default": nothing to send
+    busy = true; const name = r.path.split('/').pop(); say(T('Sending') + ' ' + name + '...');
+    try {
+      await api('send-file', {id: chat.chat.id, path: r.path, text: $('#compose').value.trim(), reply: reply ? {id: reply.id, from: reply.from, text: (reply.text || '').slice(0, 200)} : null});
+      $('#compose').value = ''; reply = editing = null; say('');
+      await reloadChat();
+    } catch (e) { say(e.message); }
+    busy = false; sel = rows().length - 2; draw();
+  }
+
+  function openActions(m) {
+    const items = [];
+    for (const a of (m.attachments || [])) {
+      items.push({label: T('Open') + ' ' + a.name.slice(0, 28), run: () => openAttachment(m, a)});
+      if (a.type !== 'file') items.push({label: T('Save') + ' ' + a.name.slice(0, 28), run: () => saveAttachment(m, a)});
+    }
+    items.push({label: 'Reply', run: () => { reply = {id: m.id, from: m.from, text: m.text}; editing = null; focusCompose(); }});
+    if (m.mine) {
+      items.push({label: 'Edit', run: () => { editing = m; reply = null; $('#compose').value = m.text; focusCompose(); }});
+      items.push({label: 'Delete', run: () => { act = {title: T('Delete this message for everyone?'), sel: 1, items: [
+        {label: 'Yes, delete', run: async () => { try { await api('delete', {id: chat.chat.id, message_id: m.id}); await reloadChat(); } catch (e) { say(e.message); } }},
+        {label: 'Cancel', run: () => {}}]}; draw(); return 'keep'; }});
+    }
+    items.push({label: 'Cancel', run: () => {}});
+    act = {title: (m.mine ? T('You') : short(m.from)) + ': ' + m.text.slice(0, 40), sel: 0, items};
+    draw();
+  }
+  async function runAction() {
+    const it = act.items[act.sel], keep = await it.run();
+    if (keep !== 'keep') act = null;
+    draw();
+  }
+  function focusCompose() { act = null; sel = rows().length - 1; draw(); $('#compose').focus(); }
+
+  async function sendCompose() {
+    const text = $('#compose').value.trim();
+    if (!text || busy || !chat) return;
+    busy = true;
+    try {
+      if (editing) await api('edit', {id: chat.chat.id, message_id: editing.id, text});
+      else await api('send', {id: chat.chat.id, text, reply: reply ? {id: reply.id, from: reply.from, text: (reply.text || '').slice(0, 200)} : null});
+      $('#compose').value = ''; editing = reply = null; say('');
+      await reloadChat();
+    } catch (e) { say(e.message); }
+    busy = false;
+  }
+
+  function draw() {
+    $('#head .t').textContent = 'Ratatosk' + (status && status.email && screen === 'list' ? '  ·  ' + status.email : '');
+    const s = $('#stat');
+    s.className = 's' + (status && status.signed_in && (status.online === false || status.error) ? ' bad' : '');
+    s.textContent = !status || !status.signed_in ? '' : status.online === false ? T('offline') : status.syncing ? T('syncing...') : status.last_sync ? T('synced') + ' ' + when(status.last_sync * 1000) : '';
+    const rs = rows();
+    sel = Math.max(0, Math.min(sel, rs.length - 1));
+    if (screen === 'signin') {
+      $('#f-email').classList.toggle('sel', sel === 0); $('#f-pass').classList.toggle('sel', sel === 1); $('#go').classList.toggle('sel', sel === 2);
+      $('#foot').textContent = '↑↓ select  A edit / sign in';
+    } else if (screen === 'list') {
+      const l = $('#list'); l.innerHTML = '';
+      rs.forEach((r, i) => {
+        const d = document.createElement('div'); d.className = 'row' + (r.out ? ' out' : '') + (r.newchat ? ' newchat' : '') + (i === sel ? ' sel' : ''); d.dataset.row = i;
+        const n = document.createElement('span'); n.className = 'name'; n.textContent = r.out ? T('Sign out') : r.newchat ? '+ ' + T('New chat or group') : r.chat.name; d.appendChild(n);
+        if (r.chat) {
+          if (r.chat.is_group) { const g = document.createElement('span'); g.className = 'grp'; g.textContent = T('group'); d.appendChild(g); }
+          const w = document.createElement('span'); w.className = 'when'; w.textContent = when(r.chat.last_at); d.appendChild(w);
+          if (r.chat.unread > 0) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = r.chat.unread; d.appendChild(b); }
+        }
+        d.onclick = () => { sel = i; draw(); activate(); };
+        l.appendChild(d);
+      });
+      if (rs.length === 2) { const e = document.createElement('div'); e.className = 'big'; e.textContent = status && status.syncing ? T('Loading the chats...') : T('No chats yet.'); l.insertBefore(e, l.firstChild); }
+      const c = l.children[sel]; if (c && c.scrollIntoView) c.scrollIntoView({block: 'nearest'});
+      $('#foot').textContent = '↑↓ select  ◀▶ page  A open  B exit';
+      drawAct();
+    } else if (screen === 'chat' && chat) {
+      drawChat(rs);
+    } else if (screen === 'info' && info) {
+      drawRows($('#ilist'), rs); $('#head .t').textContent = info.name; $('#foot').textContent = act ? '↑↓ select  A choose  B close' : '↑↓ select  A choose  B back'; drawAct();
+    } else if (screen === 'pick' && pick) {
+      drawRows($('#plist'), rs); $('#head .t').textContent = pick.title; $('#foot').textContent = act ? '↑↓ select  A choose  B close' : '↑↓ select  A choose  B back'; drawAct();
+    } else {
+      $('#foot').textContent = '';
+    }
+  }
+
+  async function refresh(first) {
+    try {
+      status = await api('status');
+      if (!status.configured && !status.signed_in) { show('setup'); return; }
+      if (!status.signed_in) { if (screen !== 'signin') show('signin'); return; }
+      chats = (await api('chats')).chats;
+      if (screen !== 'list') show('list'); else draw();
+      if (first && !status.last_sync) api('sync', {}).then(s => { status = s; return api('chats'); }).then(c => { chats = c.chats; draw(); }).catch(() => {});
+    } catch (e) { say(e.message); }
+  }
+
+  async function signIn() {
+    if (busy) return;
+    const email = $('#email').value.trim(), password = $('#pass').value;
+    if (!email || !password) { say(T('Enter the email and the password.')); return; }
+    busy = true; say(T('Signing in...'));
+    try {
+      await api('signin', {email, password});
+      $('#pass').value = ''; say(''); sel = 0;
+      await refresh(true);
+    } catch (e) {
+      say(e.code === 'bad-credentials' ? T('Wrong email or password.') : e.code === 'network' ? T('No connection to the server.') : e.code === 'not-configured' ? T('The key of the server is missing.') : e.message);
+      if (e.code === 'not-configured') refresh();
+    }
+    busy = false;
+  }
+
+  async function activate() {
+    const r = rows()[sel]; if (!r) return;
+    if (screen === 'signin') {
+      if (r === 'go') return signIn();
+      $(r === 'email' ? '#email' : '#pass').focus();
+      return;
+    }
+    if (screen === 'info' || screen === 'pick') return r.run && r.run();    // a row of the members' list or of the search results brings its own action
+    if (screen === 'list') {
+      if (r.out) { await api('signout', {}).catch(e => say(e.message)); chats = []; status = null; sel = 0; dropThumbs(); return refresh(); }
+      if (r.newchat) return newChatMenu();
+      return openChat(r.chat.id);
+    }
+    if (screen === 'chat') {
+      if (r.call) return startCall();
+      if (r.join) return joinCall();
+      if (r.info) return openInfo();
+      if (r.attach) return pickAndSend();              // the file dialog of the platform; the typed text becomes the caption
+      if (r.composer) return $('#compose').focus();    // the on-screen keyboard comes up; Enter in the field sends
+      if (r.m) return openActions(r.m);
+    }
+  }
+
+  // Enter in a field goes on (email -> password -> sign in); the keyboard is then put away
+  $('#email').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sel = 1; draw(); $('#pass').focus(); } });
+  $('#pass').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#pass').blur(); sel = 2; draw(); signIn(); } });
+  $('#go').onclick = () => { sel = 2; signIn(); };
+  $('#f-email').onclick = () => { sel = 0; draw(); };
+  $('#f-pass').onclick = () => { sel = 1; draw(); };
+
+  // Enter in the message field sends it (the keyboard stays up for the next one); the Send button does the same
+  $('#compose').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendCompose(); } });
+  $('#sendbtn').onclick = () => sendCompose();
+  $('#composer').onclick = e => { if (e.target.id !== 'sendbtn') { sel = rows().length - 1; draw(); $('#compose').focus(); } };
+
+  // ---- calls (stage 2): the screen over everything while a call is going on. A answers / mutes, B declines / hangs up (an answered call: twice), nothing else is mapped
+  let call = {state: 'idle'}, hangArm = 0;
+  const callOn = () => call.state && call.state !== 'idle';
+  async function callApi(path, body) { try { call = await api(path, body || {}); } catch (e) { say(e.message); } drawCall(); }
+  // ---- groups (stage 7b): who is in a chat, new chats and groups, search, add / remove / leave / delete / rename ------------------------
+  let info = null, pick = null, ask = null;      // the open group's people; a list of choices (search results); the text form that is open
+  const isEmail = s => /^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$/.test(s);
+
+  function drawRows(box, rs) {                   // a plain list of rows {label, sub?, cls?, run}
+    box.innerHTML = '';
+    rs.forEach((r, i) => {
+      const d = document.createElement('div'); d.className = 'row' + (r.cls ? ' ' + r.cls : '') + (i === sel ? ' sel' : ''); d.dataset.row = i;
+      const n = document.createElement('span'); n.className = 'name'; n.textContent = r.label; d.appendChild(n);
+      if (r.sub) { const s = document.createElement('span'); s.className = 'sub'; s.textContent = r.sub; d.appendChild(s); }
+      d.onclick = () => { sel = i; draw(); activate(); };
+      box.appendChild(d);
+    });
+    if (!rs.length) { const e = document.createElement('div'); e.className = 'big'; e.textContent = (pick && pick.empty) || ''; box.appendChild(e); }
+    const c = box.children[sel]; if (c && c.scrollIntoView) c.scrollIntoView({block: 'nearest'});
+  }
+
+  function askText(title, hint, initial) {       // a one-line form over the screen; resolves the text, or null when cancelled (B on an empty field, or a tap outside)
+    return new Promise(resolve => {
+      ask = {resolve}; $('#f-title').textContent = title; $('#f-hint').textContent = hint || ''; $('#f-in').value = initial || '';
+      $('#form').classList.add('on'); $('#f-in').focus();
+    });
+  }
+  function closeAsk(v) { if (!ask) return; const r = ask.resolve; ask = null; $('#form').classList.remove('on'); $('#f-in').blur(); r(v); }
+  $('#f-in').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); closeAsk($('#f-in').value.trim() || null); } });
+  $('#form').onclick = e => { if (e.target.id === 'form') closeAsk(null); };
+
+  const confirmAct = (title, yes, run) => { act = {title, sel: 1, items: [{label: yes, run: () => { act = null; draw(); run(); return 'keep'; }}, {label: 'Cancel', run: () => {}}]}; draw(); };
+  const failSay = e => say(e.message || String(e));
+
+  function infoRows() {
+    const out = [];
+    if (info.me_admin) out.push({label: T('Rename the group'), run: renameGroup});
+    for (const p of info.people) {
+      const you = p.email === info.me;
+      out.push({label: p.name + (you ? '  (' + T('you') + ')' : ''), sub: p.role === 'admin' ? T('admin') : p.name !== p.email ? p.email : '', run: () => {
+        if (info.me_admin && !you) confirmAct(T('Remove') + ' ' + p.name + '?', T('Yes, remove'), () => api('group-remove', {id: info.id, email: p.email}).then(reloadInfo).catch(failSay));
+        else say(p.email);
+      }});
+    }
+    for (const e of info.invited || []) out.push({label: e, sub: T('invited'), cls: 'dim', run: () => say(T('Invited: they join when they sign in'))});
+    if (info.me_admin) out.push({label: '+ ' + T('Add a person'), run: addPerson});
+    out.push({label: T('Leave this group'), cls: 'danger', run: () => confirmAct(T('Leave this group?'), T('Yes, leave'), () => api('group-leave', {id: info.id}).then(() => { say(T('You left the group')); exitToList(); }).catch(failSay))});
+    if (info.me_admin) out.push({label: T('Delete this group'), cls: 'danger', run: () => confirmAct(T('Delete this group for everybody?'), T('Yes, delete'), () => api('group-delete', {id: info.id}).then(() => { say(T('The group was deleted')); exitToList(); }).catch(failSay))});
+    return out;
+  }
+  async function openInfo() {
+    try { info = await api('group?id=' + encodeURIComponent(chat.chat.id)); sel = 0; screen = 'info'; show('info'); } catch (e) { failSay(e); }
+  }
+  async function reloadInfo() { try { info = await api('group?id=' + encodeURIComponent(info.id)); draw(); } catch (e) { failSay(e); } }
+  function closeInfo() {
+    info = pick = null; screen = 'chat'; show('chat'); sel = rows().findIndex(r => r.info); draw();
+  }
+  function exitToList() { chat = null; info = pick = null; ongoing = null; dropThumbs(); screen = 'list'; sel = Math.min(listSel, rows().length - 1); show('list'); refresh(false); }
+  function openPick(title, items, empty) { pick = {title, items, empty, from: screen, back: () => { const f = pick.from; pick = null; screen = f; show(f); draw(); }}; sel = 0; screen = 'pick'; show('pick'); }
+
+  async function renameGroup() {
+    const n = await askText(T('New name of the group'), '', info.name);
+    if (n) api('group-rename', {id: info.id, name: n}).then(reloadInfo).catch(failSay);
+  }
+  async function searchPeople(title, forGroup) {   // ask for a name or an address, show who is found; -> the e-mail picked, or null
+    const q = await askText(title, T('name or e-mail address (two letters at least)'));
+    if (!q) return null;
+    let results = [];
+    try { results = (await api('users-search', {query: q})).results; } catch (e) { failSay(e); return null; }
+    return new Promise(resolve => {
+      const items = results.map(r => ({label: r.name, sub: r.email, run: () => { pick = null; resolve(r.email); }}));
+      if (isEmail(q) && !results.some(r => r.email === q.toLowerCase())) items.push({label: (forGroup ? T('Invite') : T('Write to')) + ' ' + q.toLowerCase(), run: () => { pick = null; resolve(q.toLowerCase()); }});
+      openPick(T('Found') + ': ' + q, items, T('Nobody found'));
+      const back = pick.back; pick.back = () => { back(); resolve(null); };
+    });
+  }
+  async function addPerson() {
+    const email = await searchPeople(T('Add a person'), true);
+    if (!email) return;
+    try { const r = await api('group-add', {id: info.id, email}); say(r.result === 'invited' ? T('Invited: they join when they sign in') : T('Added')); } catch (e) { failSay(e); }
+    screen = 'info'; show('info'); await reloadInfo();
+  }
+  async function newChatMenu() {
+    act = {title: T('New'), sel: 0, items: [
+      {label: 'Chat with a person', run: () => { act = null; draw(); chatWithPerson(); return 'keep'; }},
+      {label: 'New group', run: () => { act = null; draw(); newGroup(); return 'keep'; }},
+      {label: 'Find a group', run: () => { act = null; draw(); findGroups(); return 'keep'; }},
+      {label: 'Cancel', run: () => {}}]};
+    draw();
+  }
+  async function openById(id) { chats = (await api('chats')).chats; pick = null; await openChat(id); }
+  async function chatWithPerson() {
+    const email = await searchPeople(T('Chat with a person'), false);
+    if (!email) { screen = 'list'; show('list'); return; }
+    try { const r = await api('dm-create', {email}); await openById(r.id); } catch (e) { screen = 'list'; show('list'); failSay(e); }
+  }
+  async function newGroup() {
+    const name = await askText(T('Name of the new group'), T('you add the people next'));
+    if (!name) return;
+    try { const r = await api('group-create', {name, members: []}); await openById(r.id); await openInfo(); } catch (e) { failSay(e); }
+  }
+  async function findGroups() {
+    const q = await askText(T('Find a group'), T('part of its name (two letters at least)'));
+    if (!q) return;
+    try {
+      const rs = (await api('groups-search', {query: q})).results;
+      openPick(T('Groups') + ': ' + q, rs.map(g => ({label: g.name, sub: g.count + ' ' + T('people') + (g.member ? '' : '  ·  ' + T('not yours')), run: () => g.member ? openById(g.id) : say(T('Ask an admin of the group to add you'))})), T('No group found'));
+    } catch (e) { failSay(e); }
+  }
+
+  // a call going on in this chat that we are not in: the banner offers to join it (stage 7); the same room, a token of our own
+  function joinCall() { if (chat && !callOn()) { say(''); callApi('call-join', {id: chat.chat.id}); } }
+  function setOngoing(o) {
+    if (JSON.stringify(o) === JSON.stringify(ongoing)) return;
+    const had = !!ongoing; ongoing = o;
+    if (!had && o && sel > 0) sel++;                       // a row appeared above the messages: the cursor stays on the same row
+    else if (had && !o) { if (sel > 1) sel--; else if (sel === 1) sel = 0; }
+    draw();
+  }
+  async function pollOngoing() {
+    if (screen !== 'chat' || !chat || callOn()) { if (ongoing) setOngoing(null); return; }
+    try { const r = await api('call-ongoing', {id: chat.chat.id}); if (chat) setOngoing(r.ongoing); } catch (e) { /* the network may be down: the banner stays as it was */ }
+  }
+  function startCall(mode) { if (chat && !callOn()) { say(''); callApi('call-start', {id: chat.chat.id, mode: mode === 'video' ? 'video' : 'audio'}); } }
+  async function pollCall() {
+    try {
+      const was = callOn(); call = await api('call'); if (callOn() !== was || callOn()) drawCall();
+      if (call.missed) {                                  // shown; the badge of the tile goes when somebody has touched the console since (the console decides: a page that came up for a call on its own has shown nothing to anybody)
+        const key = call.missed + ':' + ((call.missed_list[call.missed_list.length - 1] || {}).ts || 0);
+        if (key !== seenMissed) { seenMissed = key; say(T('Missed calls') + ': ' + call.missed_list.map(m => short(m.from) || m.name).join(', ')); }
+        tryClearMissed();
+      }
+    } catch (e) { /* the network may be down: the screen stays as it was */ }
+  }
+  const secs = t => { const s = Math.max(0, Math.floor(Date.now() / 1000 - t)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  function drawCall() {
+    const on = callOn(), el = $('#call');
+    el.classList.toggle('on', on);
+    const vid = on && call.video && (call.remote_video || call.camera === 'on');   // the screen is the picture while there is one
+    el.classList.toggle('vid', !!vid);
+    // the pictures of the others: one tile each (up to four), filling the screen for one person, a grid for several; the own picture is small in the corner
+    const tiles = on && call.video ? (call.remotes || []).filter(r => r.tile !== null && r.tile !== undefined) : [];
+    const box = $('#c-tiles'), tkey = tiles.map(t => call.call_id + ':' + t.tile + ':' + t.identity).join('|');
+    box.className = 'n' + Math.min(4, tiles.length); box.style.display = tiles.length ? 'grid' : 'none';
+    if (box.dataset.key !== tkey) {
+      box.dataset.key = tkey; box.innerHTML = '';
+      for (const t of tiles) {
+        const d = document.createElement('div'); d.className = 'tile'; const im = document.createElement('img'); im.alt = ''; im.src = '/api/rt/call-video?t=' + t.tile + '&c=' + encodeURIComponent(call.call_id);
+        const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = t.name; d.append(im, nm); box.appendChild(d);
+      }
+    }
+    const me = $('#c-me'), wantMe = on && call.video && call.camera === 'on', mkey = wantMe ? call.call_id : '';
+    if (me.dataset.key !== mkey) { me.dataset.key = mkey; if (wantMe) me.src = '/api/rt/call-preview?c=' + encodeURIComponent(mkey); else me.removeAttribute('src'); }
+    me.style.display = wantMe ? 'block' : 'none';
+    $('#c-people').textContent = (call.remotes || []).length > 1 || (call.max_remotes || 0) > 1 ? (call.remotes || []).map(r => r.name + ' ' + '▮'.repeat(Math.min(4, Math.round((r.level || 0) / 400)))).join('   ') : '';
+    if (!on) { hangArm = 0; return; }
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();   // the keyboard goes away
+    const s = call.state, inc = s === 'incoming', who = call.incoming ? (call.from || '').split('@')[0] : '';
+    $('#c-who').textContent = call.name || '';
+    const st = $('#c-st'); st.className = 'st' + (s === 'ended' ? ' bad' : '');
+    st.textContent = inc ? T(call.video ? 'Incoming video call' : 'Incoming call') + (who ? ': ' + who : '') : s === 'dialing' ? T('Calling...') : s === 'connecting' ? T('Connecting...')
+      : s === 'active' ? T('Talking') + '  ' + (call.connected_at ? secs(call.connected_at) : '') + (call.muted ? '  ·  ' + T('microphone off') : '') : (call.reason || T('Call ended'));
+    $('#c-lv').style.visibility = s === 'active' ? 'visible' : 'hidden';
+    $('#c-lv i').style.width = Math.min(100, Math.round((call.level || 0) / 30)) + '%';
+    const b = $('#c-btns'); b.innerHTML = '';
+    const add = (cls, text, fn) => { const d = document.createElement('div'); d.className = 'btn ' + cls; d.textContent = text; d.onclick = fn; b.appendChild(d); };
+    if (inc) { add('ok', 'A  ' + T('Answer'), () => callApi('call-accept')); add('no', 'B  ' + T('Decline'), () => callApi('call-decline')); }
+    else if (s === 'ended') add('', T('Close'), () => { call = {state: 'idle'}; drawCall(); });
+    else {
+      if (s === 'active') add('', 'A  ' + (call.muted ? T('Microphone on') : T('Mute')), () => callApi('call-mute', {on: !call.muted}));
+      if (call.video && call.camera !== 'none') add('', (call.camera === 'on' ? T('Camera off') : T('Camera on')), () => callApi('call-camera', {on: call.camera !== 'on'}));
+      add('no', 'B  ' + (hangArm && s === 'active' ? T('Hang up?') : T('Hang up')), hangUp);
+    }
+    $('#c-hint').textContent = s === 'active' && hangArm ? T('Press B once more to hang up')
+      : call.video && call.camera === 'none' && (s === 'active' || s === 'dialing') && !inc && s !== 'ended' ? T('This console has no camera: you see them, they do not see you') : '';
+    $('#foot').textContent = inc ? 'A answer  B decline' : s === 'ended' ? 'A / B close' : s === 'active' ? 'A mute  B hang up (twice)' : 'B hang up';
+  }
+  function hangUp() {
+    if (call.state === 'active' && !hangArm) { hangArm = Date.now(); setTimeout(() => { hangArm = 0; drawCall(); }, 3000); return drawCall(); }
+    hangArm = 0; callApi('call-hangup');
+  }
+  function callKey(e) {
+    const k = e.key, s = call.state;
+    if (k !== 'Enter' && k !== 'Escape') return;
+    e.preventDefault();
+    if (s === 'incoming') return callApi(k === 'Enter' ? 'call-accept' : 'call-decline');
+    if (s === 'ended') { call = {state: 'idle'}; return drawCall(); }
+    if (k === 'Escape') return hangUp();
+    if (s === 'active') callApi('call-mute', {on: !call.muted});
+  }
+  let seenMissed = '', lastClear = 0;
+  function tryClearMissed() { const now = Date.now(); if (now - lastClear < 1500) return; lastClear = now; api('call-missed-clear', {}).catch(() => {}); }
+  addEventListener('keydown', () => { if (call.missed) tryClearMissed(); }, true);      // the console was touched: if missed calls are waiting, they are seen now
+  addEventListener('pointerdown', () => { if (call.missed) tryClearMissed(); }, true);
+  setInterval(pollCall, 1000);
+  setInterval(pollOngoing, 3000);
+
+  addEventListener('keydown', e => {
+    if (callOn()) return callKey(e);
+    if (viewer) {                                      // a picture full screen: B or A close it, the cursor keys go to the previous / next picture of the chat
+      const k = e.key;
+      if (k === 'Escape' || k === 'Enter') { e.preventDefault(); viewer = null; return drawViewer(); }
+      if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown') {
+        e.preventDefault(); const d = (k === 'ArrowLeft' || k === 'ArrowUp') ? -1 : 1;
+        viewer.at = Math.max(0, Math.min(viewer.list.length - 1, viewer.at + d)); return drawViewer();
+      }
+      return;
+    }
+    if (ask) {                                         // a one-line form is open: B (which reaches us on an empty field, or with the keyboard hidden) cancels it
+      if (e.key === 'Escape') { e.preventDefault(); closeAsk(null); }
+      return;
+    }
+    const f = document.activeElement;
+    if (f && /^(INPUT|TEXTAREA)$/.test(f.tagName)) {   // the field and the keyboard own the keys, except B: with the keyboard hidden (Y) or the field empty it reaches us and leaves the field
+      if (e.key === 'Escape') { e.preventDefault(); f.blur(); draw(); }
+      return;
+    }
+    const k = e.key;
+    if (act) {                                        // the menu over a message
+      if (k === 'ArrowUp') act.sel = Math.max(0, act.sel - 1);
+      else if (k === 'ArrowDown') act.sel = Math.min(act.items.length - 1, act.sel + 1);
+      else if (k === 'Enter') { e.preventDefault(); return runAction(); }
+      else if (k === 'Escape') act = null;
+      else return;
+      e.preventDefault(); return draw();
+    }
+    if (k === 'ArrowUp') sel--;
+    else if (k === 'ArrowDown') sel++;
+    else if ((k === 'ArrowLeft' || k === 'ArrowRight') && (screen === 'list' || screen === 'chat')) pageMove(k === 'ArrowRight' ? 1 : -1);   // the cursor keys are the owner's to give: a page up / down
+    else if (k === 'Enter') { e.preventDefault(); return activate(); }
+    else if (k === 'Escape' && screen === 'chat') { e.preventDefault(); return leaveChat(); }
+    else if (k === 'Escape' && screen === 'info') { e.preventDefault(); return closeInfo(); }
+    else if (k === 'Escape' && screen === 'pick') { e.preventDefault(); return pick.back(); }
+    else if (k === 'Escape') { e.preventDefault(); return Platform.exit(); }   // B at the top level leaves the app, as in the Communicator and Files
+    else return;
+    e.preventDefault(); draw();
+  });
+
+  // where the user stood comes back: the row of the list, and the chat that was open
+  Platform.onClose(() => Platform.state.set({sel: screen === 'chat' ? listSel : sel, chat: chat ? chat.chat.id : null}));
+  (async () => {
+    const st = await Platform.state.get().catch(() => null);
+    if (st && Number.isInteger(st.sel)) sel = st.sel;
+    show('signin');
+    pollCall();                                        // a call that went on while the app was left is shown at once (the hang-up is pressed here)
+    await refresh(true);
+    if (st && st.chat && screen === 'list') await openChat(st.chat);
+    setInterval(() => { if (screen === 'list') refresh(false); else if (screen === 'chat') reloadChat(); }, 8000);
+  })();
+</script>

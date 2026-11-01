@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Minecraft</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+</style>
+<iframe id="game" allow="fullscreen; autoplay; clipboard-write; microphone" allowfullscreen></iframe>
+<script src="/platform.js"></script>
+<script>
+// The player of the cloud Minecraft on Android, where GStreamer's player.py cannot run: the node's own stream page with its phone layer
+// (?mobile=1: the touch joystick, the camera zone and the buttons of stream_mobile.js), exactly as the cloud's session page opens it on a phone. The WebView has WebRTC,
+// so no client of ours is needed. The page stays ours around it, so MODE (Platform.onClose) tells the service, which stops the node: the wallet pays per second.
+(() => {
+  const API = '/api/app/minecraft/';
+  const frame = document.getElementById('game');
+  const api = (p, o) => fetch(API + p, o).then(r => r.json());
+  const ended = code => api('ended', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code})}).catch(() => {});
+  let done = false;
+  const quit = async code => { if (done) return; done = true; await ended(code); Platform.exit(); };
+
+  Platform.onClose(() => quit(0));
+  (async () => {
+    let st;
+    try { st = await api('stream'); } catch (e) { st = {}; }
+    if (!st.url) { await quit(2); return; }
+    const u = new URL(st.url);
+    u.searchParams.set('mobile', '1');
+    frame.src = u.toString();
+  })();
+})();
+</script>

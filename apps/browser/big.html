@@ -1,0 +1,52 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Browser (external screen)</title>
+<!--
+  The browser on the external (HDMI) screen: the UI view of the second ic-browser (native/browser, IC_BROWSER_STRIP=0), the window there that shows the page and the tabs and nothing else.
+  This page draws nothing (it is transparent and under the page); it is the bridge between that window and the remote, which is chrome.html on the console:
+    the remote -> Platform.display.send({cmd: "nav:<address>" | "back" | "fwd" | "reload" | "newtab" | "close:<i>" | "switch:<i>" | "state?"}) -> host(cmd)
+    the host -> window.ic.state({tabs, home, active, max, back, fwd, loading}) -> Platform.display.send({state}) to the remote
+  It keeps the session (the tabs, where each page is scrolled to) in Platform.state when it is covered by another app or closed (Platform.onSuspend), and takes it from there when it comes back.
+  A first start has the tabs of the console as its argument ({urls, scrolls, active}) or, from the browser's own saved session, the last tabs.
+-->
+<style>html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }</style>
+<script src="/platform.js"></script>
+<script>
+  const host = m => { try { window.webkit.messageHandlers.host.postMessage(m); } catch (e) {} };
+  let st = {tabs: [], home: '', active: 0, max: 5, back: false, fwd: false, loading: false};
+  let sendTimer = null, saveTimer = null, savedKey = '';
+
+  const session = () => ({active: st.active, urls: st.tabs.map(t => t.uri).filter(u => u), scrolls: st.tabs.filter(t => t.uri).map(t => t.scroll | 0)});
+  const restoreCmd = s => 'restore:' + (s.active | 0) + '|' + s.urls.map((u, i) => u + '\t' + ((s.scrolls || [])[i] | 0)).join('\n');
+  const save = () => { clearTimeout(saveTimer); const s = session(); if (!s.urls.length) return Promise.resolve(); savedKey = JSON.stringify(s); return Platform.state.set(s).catch(() => {}); };
+
+  // the host's state goes to the remote (a moment after the last change), and is kept for a covered page
+  window.ic = {state(s) {
+    st = s;
+    clearTimeout(sendTimer); sendTimer = setTimeout(() => Platform.display.send({state: st}).catch(() => {}), 120);
+    clearTimeout(saveTimer); saveTimer = setTimeout(() => { if (JSON.stringify(session()) !== savedKey) save(); }, 1500);
+  }};
+
+  // the remote's commands: only what the strip and the menu of the browser say to the host
+  const OK = /^(nav:.+|back|fwd|reload|newtab|close:\d+|switch:\d+)$/;
+  Platform.display.onMessage(m => {
+    if (!m || typeof m.cmd !== 'string') return;
+    if (m.cmd === 'state?') { Platform.display.send({state: st}).catch(() => {}); return; }
+    if (OK.test(m.cmd)) host(m.cmd);
+  });
+
+  // saved when covered, closed or unplugged: the next page of the window comes after this answer
+  Platform.onSuspend(async () => { host('sync'); await new Promise(r => setTimeout(r, 400)); await save(); });   // 'sync': where the pages are scrolled to, now
+
+  (async () => {
+    try { host('osk:' + await (await fetch('/osk-bundle.js')).text()); } catch (e) {}      // the keyboard of the pages (layouts and words in the interface language)
+    const [l, saved] = await Promise.all([Platform.display.launch().catch(() => ({})), Platform.state.get().catch(() => null)]);
+    let s = null;
+    if (l && l.arg && Array.isArray(l.arg.urls) && l.arg.urls.length) s = l.arg;            // the tabs of the console, moved here
+    else if (l && l.resume && saved && Array.isArray(saved.urls) && saved.urls.length) s = saved;   // coming back from under another app
+    else { try { const v = await Platform.db.get('session'); if (v) s = JSON.parse(v); } catch (e) {} }   // the last session of the browser
+    if (s && s.urls && s.urls.length) { savedKey = JSON.stringify(s); host(restoreCmd(s)); }
+    host('ready');
+  })();
+</script>

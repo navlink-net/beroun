@@ -1,0 +1,435 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Quidditch</title>
+<meta name="viewport" content="width=640,height=480">
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #060a10; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; height: 100%; width: auto; max-width: 100%; aspect-ratio: 4 / 3; }   /* 4:3 on any screen: the console as it is, the big screen with bars at the sides */
+</style>
+<canvas id="c" width="640" height="480"></canvas>
+<script src="/platform.js"></script>
+<script src="/gameext.js"></script>
+<script src="sim.js"></script>
+<script>
+// Quidditch, single player: you fly one of the seven players of a team against the AI, no server and no login. The match is sim.js; this page is the screens and the controls.
+// Buttons: the left stick (or the D-pad) flies, the right stick aims a throw, A is the main action of your role, X passes, Y changes the camera, B opens the menu.
+// With an external screen the match is on it and the console shows the splash (web-shell/gameext.js).
+const Q = window.QuidditchSim;
+const W = 640, H = 480;
+const F = '"DejaVu Sans", sans-serif', FS = '"DejaVu Serif", serif';
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const GOLD = '#f0b030', GREEN = '#40e060', PALE = '#e8d5a3', DIM = '#8a8070';
+const TEAM_COLOR = {A: GOLD, B: GREEN};
+const ROLE_NAME = {keeper: 'Keeper', chaser: 'Chaser', beater: 'Beater', seeker: 'Seeker'};
+const DIFFS = ['easy', 'normal', 'hard'], DIFF_NAME = {easy: 'Easy', normal: 'Normal', hard: 'Hard'};
+
+// ---------------------------------------------------------------------------------------------------
+// pictures and the calibration of the pitch pictures (as in the gamepool game)
+const imgs = {};
+function load(key, src) { const i = new Image(); i.src = src; imgs[key] = i; }
+load('field_top', 'assets/field_top.webp'); load('field_side', 'assets/field_side.webp'); load('splash', 'assets/splash.webp');
+for (const t of ['A', 'B']) { load('pt_' + t, 'assets/player_top_' + t + '.webp'); load('ps_' + t, 'assets/player_side_' + t + '.webp'); }
+for (const b of ['quaffle', 'bludger', 'snitch']) load('ball_' + b, 'assets/ball_' + b + '.webp');
+for (const t of ['A', 'B']) for (const r of Q.ROSTER[t]) load('av_' + r.file, 'assets/avatar/' + r.file + '.webp');
+for (const p of ['mcgonagall', 'flitwick', 'hooch', 'dumbledore', 'hagrid', 'snape']) { load('st_side_' + p, 'assets/stand/prof_side_' + p + '.webp'); load('st_top_' + p, 'assets/stand/prof_top_' + p + '.webp'); }
+const ok = i => i && i.complete && i.naturalWidth;
+
+const SIDE = {imgW: 1920, imgH: 800, xLeft: 110, xRight: 1810, yGnd: 660, yTop: 110};
+const TOP = {imgW: 1024, imgH: 576, xLeft: 50, xRight: 974, zTop: 36, zBot: 540};
+const SEATS = {
+  side: [['mcgonagall', 185, 390, 20, 30], ['flitwick', 248, 402, 14, 21], ['hooch', 750, 450, 20, 30], ['dumbledore', 1090, 445, 20, 30], ['hagrid', 1718, 438, 30, 45], ['snape', 1875, 432, 20, 30]],
+  top: [['mcgonagall', 130, 275, 40, 52], ['flitwick', 110, 308, 28, 36], ['hooch', 488, 52, 40, 52], ['dumbledore', 538, 52, 40, 52], ['hagrid', 910, 272, 56, 72], ['snape', 930, 308, 40, 52]],
+};
+const FIELD_Y = 34, FIELD_H = 360;                     // the picture of the pitch sits between the score bar and the hint panel
+
+// ---------------------------------------------------------------------------------------------------
+// state
+let S = null;                                          // the match (sim.js), or null
+let cfg = {team: 'A', slot: 6, difficulty: 'normal'};  // what the next match is
+let view = 'top';                                      // the camera: top | side
+let mode = 'title';                                    // title | how | setup | play | pause | end
+let menu = null, setupRow = 0, saved = null, endAt = 0;
+const zones = [];                                      // the touch areas of this frame
+const flip = () => !!S && S.humanTeam === 'B';         // team B sees the pitch mirrored: you always attack to the right
+
+// ---------------------------------------------------------------------------------------------------
+// drawing helpers
+function txt(s, x, y, size, color, align, bold, font) {
+  ctx.font = (bold ? 'bold ' : '') + size + 'px ' + (font || F); ctx.fillStyle = color || '#fff'; ctx.textAlign = align || 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(s, x, y);
+}
+function box(x, y, w, h, fill, line) { ctx.fillStyle = fill; ctx.fillRect(x, y, w, h); if (line) { ctx.strokeStyle = line; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2); } }
+function zone(x, y, w, h, fn) { zones.push({x, y, w, h, fn}); }
+function cover(img, x, y, w, h) { if (!ok(img)) return; const r = Math.max(w / img.naturalWidth, h / img.naturalHeight), iw = img.naturalWidth * r, ih = img.naturalHeight * r; ctx.drawImage(img, x + (w - iw) / 2, y + (h - ih) / 2, iw, ih); }
+const mmss = t => String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(Math.floor(t % 60)).padStart(2, '0');
+
+// ---------------------------------------------------------------------------------------------------
+// the picture of the match
+// to canvas pixels: the top view and the side view (mirrored for team B)
+function topPos(x, z) {
+  const xx = flip() ? 500 - x : x, k = W / TOP.imgW;
+  return {px: (TOP.xLeft + xx / 500 * (TOP.xRight - TOP.xLeft)) * k, py: FIELD_Y + (TOP.zTop + (180 - z) / 180 * (TOP.zBot - TOP.zTop)) * k};
+}
+const SIDE_K = W / SIDE.imgW, SIDE_Y0 = FIELD_Y + (FIELD_H - SIDE.imgH * SIDE_K) / 2;
+function sidePos(x, y) {
+  const xx = flip() ? 500 - x : x;
+  return {px: (SIDE.xLeft + xx / 500 * (SIDE.xRight - SIDE.xLeft)) * SIDE_K, py: SIDE_Y0 + (SIDE.yGnd - y / 55 * (SIDE.yGnd - SIDE.yTop)) * SIDE_K};
+}
+function drawField() {
+  if (view === 'top') {
+    const img = imgs.field_top;
+    if (ok(img)) {
+      ctx.save();
+      if (flip()) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+      ctx.drawImage(img, 0, FIELD_Y, W, FIELD_H);
+      ctx.restore();
+    }
+    const k = W / TOP.imgW;
+    for (const [key, px, py, nw, nh] of SEATS.top) {
+      const im = imgs['st_top_' + key]; if (!ok(im)) continue;
+      const cx = (flip() ? TOP.imgW - px : px) * k, cy = FIELD_Y + py * k;
+      ctx.drawImage(im, cx - nw * k / 2, cy - nh * k / 2, nw * k, nh * k);
+    }
+  } else {
+    ctx.fillStyle = '#060a10'; ctx.fillRect(0, FIELD_Y, W, FIELD_H);
+    if (ok(imgs.field_side)) {
+      ctx.save();
+      if (flip()) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+      ctx.drawImage(imgs.field_side, 0, SIDE_Y0, W, SIDE.imgH * SIDE_K);
+      ctx.restore();
+    }
+    for (const [key, px, py, nw, nh] of SEATS.side) {
+      const im = imgs['st_side_' + key]; if (!ok(im)) continue;
+      const cx = (flip() ? SIDE.imgW - px : px) * SIDE_K, cy = SIDE_Y0 + py * SIDE_K;
+      ctx.drawImage(im, cx - nw * SIDE_K / 2, cy - nh * SIDE_K, nw * SIDE_K, nh * SIDE_K);
+    }
+  }
+}
+const PLAYER_SCALE = 0.76, BALL_SCALE = 1.05;   // the console is 640x480: the players have to be seen (0.62 was small)
+function drawPlayer(p) {
+  const f = flip() ? -1 : 1, nx = p.nx * f;
+  if (view === 'top') {
+    const im = imgs['pt_' + p.team]; if (!ok(im)) return;
+    const {px, py} = topPos(p.x, p.z), k = W / TOP.imgW, sw = 64 * k * PLAYER_SCALE, sh = 128 * k * PLAYER_SCALE;
+    ctx.save(); ctx.globalAlpha = p.stunTime > 0 ? 0.45 : 1; ctx.translate(px, py); ctx.rotate(Math.atan2(nx, p.nz)); ctx.drawImage(im, -sw / 2, -sh / 2, sw, sh); ctx.restore();
+  } else {
+    const im = imgs['ps_' + p.team]; if (!ok(im)) return;
+    const {px, py} = sidePos(p.x, p.y), ps = 1.2 - p.z / 180 * 0.4, sw = 128 * SIDE_K * PLAYER_SCALE * ps * 1.6, sh = 80 * SIDE_K * PLAYER_SCALE * ps * 1.6;
+    ctx.save(); ctx.globalAlpha = p.stunTime > 0 ? 0.45 : 1; ctx.translate(px, py);
+    if (nx < 0) ctx.scale(-1, 1);
+    ctx.rotate(Math.atan2(-p.ny, Math.abs(nx)) * 0.6); ctx.drawImage(im, -sw / 2, -sh / 2, sw, sh); ctx.restore();
+  }
+}
+function drawBall(b, type) {
+  const im = imgs['ball_' + type]; if (!ok(im)) return;
+  const dim = {quaffle: 32, bludger: 32, snitch: 48}[type], h = {quaffle: 32, bludger: 32, snitch: 24}[type];
+  if (view === 'top') {
+    const {px, py} = topPos(b.x, b.z), k = W / TOP.imgW, sw = dim * k * BALL_SCALE, sh = h * k * BALL_SCALE;
+    ctx.drawImage(im, px - sw / 2, py - sh / 2, sw, sh);
+  } else {
+    const {px, py} = sidePos(b.x, b.y), ps = 1.2 - b.z / 180 * 0.4, sw = dim * SIDE_K * BALL_SCALE * ps * 1.6, sh = h * SIDE_K * BALL_SCALE * ps * 1.6;
+    ctx.drawImage(im, px - sw / 2, py - sh / 2, sw, sh);
+  }
+}
+function pos2(o) { return view === 'top' ? topPos(o.x, o.z) : sidePos(o.x, o.y); }
+function drawMatch(now) {
+  drawField();
+  // the tired Snitch glows
+  const sn = S.snitch;
+  if (sn.window > 0) {
+    const {px, py} = pos2(sn), r = 14 + 4 * Math.sin(now / 90);
+    const gr = ctx.createRadialGradient(px, py, 2, px, py, r + 6); gr.addColorStop(0, 'rgba(255,230,120,0.95)'); gr.addColorStop(1, 'rgba(255,200,60,0)');
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(px, py, r + 6, 0, 7); ctx.fill();
+  }
+  const me = S.players[S.human];
+  // the ring under you, and the aim when you hold a ball
+  { const {px, py} = pos2(me), pulse = 0.65 + 0.35 * Math.sin(now / 160);
+    ctx.strokeStyle = 'rgba(255,255,255,' + pulse + ')'; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(px, py, 13, view === 'top' ? 13 : 7, 0, 0, 7); ctx.stroke();
+    ctx.strokeStyle = TEAM_COLOR[me.team]; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.ellipse(px, py, 16, view === 'top' ? 16 : 9, 0, 0, 7); ctx.stroke();
+    const holding = S.quaffle.carrier === me.id || S.bludgers.some(b => b.carrier === me.id);
+    if (view === 'top' && holding && me.aimx !== undefined) {
+      const f = flip() ? -1 : 1, ax = me.aimx * f, az = -me.aimz, m = Math.hypot(ax, az) || 1;
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 2; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + ax / m * 60, py + az / m * 60); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+  const ents = [...S.players];
+  if (view === 'side') ents.sort((a, b) => b.z - a.z);
+  ents.forEach(drawPlayer);
+  drawBall(S.quaffle, 'quaffle'); S.bludgers.forEach(b => drawBall(b, 'bludger')); drawBall(S.snitch, 'snitch');
+  { const {px, py} = pos2(me); txt('YOU', px, py - (view === 'top' ? 20 : 24), 10, '#fff', 'center', true); }
+  if (S.flash) {
+    ctx.save(); ctx.globalAlpha = Math.min(1, S.flash.timer);
+    txt(S.flash.text, W / 2, FIELD_Y + 70, 34, TEAM_COLOR[S.flash.team], 'center', true, FS); ctx.restore();
+  }
+}
+function drawHud() {
+  box(0, 0, W, FIELD_Y, 'rgba(0,0,0,0.88)');
+  txt('Gryffindor', 12, 23, 14, GOLD, 'left', true); txt(String(S.score.A), 130, 25, 22, GOLD, 'left', true, FS);
+  txt(mmss(S.time), W / 2, 25, 20, '#c8d8f8', 'center', true);
+  txt('Slytherin', W - 12, 23, 14, GREEN, 'right', true); txt(String(S.score.B), W - 130, 25, 22, GREEN, 'right', true, FS);
+  const me = S.players[S.human], h = Q.hints(S);
+  box(0, FIELD_Y + FIELD_H, W, H - FIELD_Y - FIELD_H, 'rgba(8,10,18,0.96)');
+  txt(me.name + '  -  ' + ROLE_NAME[me.role], 12, 418, 15, TEAM_COLOR[me.team], 'left', true);
+  txt(DIFF_NAME[S.difficulty] + ' opponents', W - 12, 418, 12, DIM, 'right');
+  const parts = [];
+  if (h.a) parts.push(['A', h.a]); if (h.x) parts.push(['X', h.x]); parts.push(['Y', 'Camera']); parts.push(['B', 'Menu']);
+  let x = 12;
+  for (const [k, label] of parts) {
+    box(x, 430, 22, 20, TEAM_COLOR[me.team], null); txt(k, x + 11, 445, 14, '#10131f', 'center', true);
+    txt(label, x + 28, 445, 14, PALE); x += 28 + ctx.measureText(label).width + 22;
+  }
+  const m = S.msgs.length ? S.msgs[S.msgs.length - 1] : null;
+  if (S.snitch.window > 0) txt('THE SNITCH IS TIRING!', W - 12, 466, 14, '#ffd24a', 'right', true);
+  else if (m) txt(m.text, 12, 468, 13, m.color || '#a0c0ff');
+  if (me.stunTime > 0) txt('Stunned!', W / 2, FIELD_Y + FIELD_H - 12, 18, '#ff7a5c', 'center', true);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// menus and screens
+function openMenu(title, items, back, sub) { menu = {title, items, sel: 0, back, sub}; }
+function drawMenu() {
+  const n = menu.items.length, w = menu.sub ? 520 : 380, h = 66 + n * 40 + (menu.sub ? 26 : 0), x = (W - w) / 2, y = Math.max(60, (H - h) / 2 + 20);
+  box(x, y, w, h, 'rgba(12,9,5,0.93)', GOLD);
+  txt(menu.title, W / 2, y + 40, 24, GOLD, 'center', true, FS);
+  if (menu.sub) txt(menu.sub, W / 2, y + 62, 14, PALE, 'center');
+  menu.items.forEach((it, i) => {
+    const iy = y + 60 + (menu.sub ? 26 : 0) + i * 40, sel = i === menu.sel;
+    if (sel) box(x + 14, iy, w - 28, 34, 'rgba(240,176,48,0.95)');
+    txt(typeof it.label === 'function' ? it.label() : it.label, W / 2, iy + 24, 18, sel ? '#1a1206' : PALE, 'center', true);
+    zone(x + 14, iy, w - 28, 34, () => { menu.sel = i; it.fn(); });
+  });
+}
+function openTitle() {
+  mode = 'title'; S = null;
+  const items = [];
+  if (saved) items.push({label: 'Continue', fn: () => { S = saved; saved = null; view = savedView; menu = null; mode = 'play'; }});
+  items.push({label: 'New match', fn: () => { menu = null; openSetup(); }});
+  items.push({label: 'How to play', fn: () => { menu = null; mode = 'how'; }});
+  items.push({label: 'Exit', fn: () => Platform.exit()});
+  openMenu('', items, () => Platform.exit());
+}
+function openSetup() { mode = 'setup'; setupRow = 0; menu = null; }
+function startMatch() {
+  S = Q.create({team: cfg.team, slot: cfg.slot, difficulty: cfg.difficulty});
+  menu = null; mode = 'play'; pend.a = pend.x = false;
+}
+function openPause() {
+  if (!S) return;
+  mode = 'pause';
+  openMenu('Paused', [
+    {label: 'Resume', fn: () => { menu = null; mode = 'play'; }},
+    {label: () => 'Camera: ' + (view === 'top' ? 'top view' : 'side view') + '  (change)', fn: () => { view = view === 'top' ? 'side' : 'top'; }},
+    {label: 'New match', fn: () => { menu = null; saveNow(true); S = null; openSetup(); }},
+    {label: 'Exit', fn: () => { saveNow(); Platform.exit(); }},
+  ], () => { menu = null; mode = 'play'; });
+}
+function openEnd() {
+  mode = 'end'; endAt = performance.now();
+  const r = S.result, me = S.players[S.human];
+  const head = r.draw ? 'A draw' : r.youWon ? 'Victory!' : 'Defeat';
+  openMenu(head, [
+    {label: 'Rematch', fn: () => { menu = null; startMatch(); }},
+    {label: 'New setup', fn: () => { menu = null; S = null; openSetup(); }},
+    {label: 'Exit', fn: () => { S = null; saveNow(true); Platform.exit(); }},
+  ], () => Platform.exit(), r.score.A + ' : ' + r.score.B + '   -   ' + Q.TEAM_NAME[r.caughtBy] + ' caught the Snitch' + (r.by ? ' (' + r.by + ')' : ''));
+}
+function drawTitle() {
+  box(0, 0, W, H, '#050810');
+  if (ok(imgs.splash)) ctx.drawImage(imgs.splash, 0, 0, W, W * imgs.splash.naturalHeight / imgs.splash.naturalWidth);   // the whole picture (16:9), the title is not cut at the sides
+  const g = ctx.createLinearGradient(0, 250, 0, H); g.addColorStop(0, 'rgba(5,8,16,0)'); g.addColorStop(0.45, 'rgba(5,8,16,0.85)'); g.addColorStop(1, 'rgba(5,8,16,1)'); ctx.fillStyle = g; ctx.fillRect(0, 250, W, H - 250);
+  txt('Single player', W / 2, 32, 14, PALE, 'center');
+  const n = menu.items.length, y0 = H - 40 - n * 38;
+  menu.items.forEach((it, i) => {
+    const iy = y0 + i * 38, sel = i === menu.sel;
+    if (sel) box(W / 2 - 130, iy - 4, 260, 34, 'rgba(240,176,48,0.95)');
+    txt(typeof it.label === 'function' ? it.label() : it.label, W / 2, iy + 20, 18, sel ? '#1a1206' : '#f6e8c0', 'center', true);
+    zone(W / 2 - 130, iy - 4, 260, 34, () => { menu.sel = i; it.fn(); });
+  });
+}
+function drawHow() {
+  box(0, 0, W, H, '#0b0f1a'); cover(imgs.field_top, 0, 0, W, H); box(0, 0, W, H, 'rgba(6,10,16,0.86)');
+  txt('How to play', W / 2, 44, 26, GOLD, 'center', true, FS);
+  const rows = [
+    ['Left stick / D-pad', 'fly (the height follows the ball by itself)'], ['Right stick', 'aim a throw (without it: where you fly)'],
+    ['A', 'the main action of your role'], ['X', 'pass to a teammate (Chasers and Keepers)'], ['Y', 'camera: top or side'], ['B', 'menu'],
+  ];
+  rows.forEach(([k, d], i) => { txt(k, 40, 90 + i * 28, 15, GOLD, 'left', true); txt(d, 230, 90 + i * 28, 15, PALE); });
+  const roles = [['Chaser', 'A shoots at the hoop you aim at (or steals / grabs the quaffle); X passes'], ['Beater', 'fetches a bludger by itself; A hits it at a rival'],
+                 ['Keeper', 'A dives for a shot; with the quaffle A throws it out'], ['Seeker', 'when the Snitch tires (it glows), get close and press A']];
+  roles.forEach(([k, d], i) => { txt(k, 40, 280 + i * 26, 15, GOLD, 'left', true); txt(d, 130, 280 + i * 26, 13, PALE); });
+  txt('The match ends when a Seeker catches the Snitch: +150 points.', W / 2, 410, 14, '#ffd24a', 'center');
+  txt('A or B: back', W / 2, 462, 13, DIM, 'center');
+}
+function drawSetup() {
+  cover(imgs.splash, 0, 0, W, H); box(0, 0, W, H, 'rgba(6,10,16,0.82)');
+  txt('New match', W / 2, 40, 26, GOLD, 'center', true, FS);
+  const roster = Q.ROSTER[cfg.team], me = roster[cfg.slot];
+  const av = imgs['av_' + me.file];
+  box(34, 66, 176, 252, 'rgba(0,0,0,0.5)', TEAM_COLOR[cfg.team]);
+  if (ok(av)) ctx.drawImage(av, 42, 72, 160, 200);
+  txt(me.name, 122, 296, 14, '#fff', 'center', true); txt(ROLE_NAME[me.role], 122, 314, 13, TEAM_COLOR[cfg.team], 'center');
+  const rows = [['Team', Q.TEAM_NAME[cfg.team], TEAM_COLOR[cfg.team]], ['Player', me.name + '  (' + ROLE_NAME[me.role] + ')', '#fff'], ['Opponents', DIFF_NAME[cfg.difficulty], '#fff']];
+  rows.forEach(([k, v, c], i) => {
+    const y = 86 + i * 64, sel = setupRow === i;
+    box(236, y, 372, 52, sel ? 'rgba(240,176,48,0.22)' : 'rgba(255,255,255,0.06)', sel ? GOLD : '#4a3a20');
+    txt(k, 252, y + 20, 12, DIM); txt('<', 258, y + 42, 18, sel ? GOLD : DIM, 'left', true); txt(v, 422, y + 42, 17, c, 'center', true); txt('>', 592, y + 42, 18, sel ? GOLD : DIM, 'right', true);
+    zone(236, y, 372, 52, () => { setupRow = i; changeSetup(1); });
+    zone(236, y, 60, 52, () => { setupRow = i; changeSetup(-1); });
+  });
+  const sel = setupRow === 3;
+  box(236, 282, 372, 44, sel ? 'rgba(240,176,48,0.95)' : 'rgba(255,255,255,0.08)', sel ? null : '#4a3a20');
+  txt('Start match', 422, 312, 20, sel ? '#1a1206' : PALE, 'center', true);
+  zone(236, 282, 372, 44, () => { setupRow = 3; startMatch(); });
+  txt('Up/Down choose   Left/Right change   A start   B back', W / 2, 462, 12, DIM, 'center');
+}
+function changeSetup(d) {
+  if (setupRow === 0) cfg.team = cfg.team === 'A' ? 'B' : 'A';
+  else if (setupRow === 1) cfg.slot = (cfg.slot + d + 7) % 7;
+  else if (setupRow === 2) cfg.difficulty = DIFFS[(DIFFS.indexOf(cfg.difficulty) + d + DIFFS.length) % DIFFS.length];
+}
+
+// ---------------------------------------------------------------------------------------------------
+// input
+const keys = {}, pend = {a: false, x: false};
+function pad() {
+  const o = {lx: 0, ly: 0, rx: 0, ry: 0};
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const g of pads) {
+    if (!g || g.axes.length < 2) continue;
+    if (Math.hypot(g.axes[0], g.axes[1]) > 0.22) { o.lx = g.axes[0]; o.ly = g.axes[1]; }
+    if (g.axes.length >= 4 && Math.hypot(g.axes[2], g.axes[3]) > 0.35) { o.rx = g.axes[2]; o.ry = g.axes[3]; }
+  }
+  return o;
+}
+addEventListener('keydown', e => {
+  const k = e.key;
+  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', ' ', 'Tab'].includes(k)) return;
+  e.preventDefault();
+  if (e.repeat && mode === 'play') return;
+  if (e.repeat && !menu && mode !== 'setup') return;
+  keys[k] = true; press(k);
+});
+addEventListener('keyup', e => { keys[e.key] = false; });
+addEventListener('blur', () => { for (const k of Object.keys(keys)) keys[k] = false; });
+function press(k) {
+  if (mode === 'play') {
+    if (k === 'Enter') pend.a = true; else if (k === ' ') pend.x = true;
+    else if (k === 'Tab') view = view === 'top' ? 'side' : 'top';
+    else if (k === 'Escape') openPause();
+    return;
+  }
+  if (mode === 'how') { if (k === 'Escape' || k === 'Enter') openTitle(); return; }
+  if (mode === 'setup') {
+    if (k === 'ArrowUp') setupRow = (setupRow + 3) % 4; else if (k === 'ArrowDown') setupRow = (setupRow + 1) % 4;
+    else if (k === 'ArrowLeft' && setupRow < 3) changeSetup(-1); else if (k === 'ArrowRight' && setupRow < 3) changeSetup(1);
+    else if (k === 'Enter') { if (setupRow === 3) startMatch(); else changeSetup(1); }
+    else if (k === 'Escape') openTitle();
+    return;
+  }
+  if (menu) {
+    if (k === 'ArrowUp') menu.sel = (menu.sel + menu.items.length - 1) % menu.items.length;
+    else if (k === 'ArrowDown') menu.sel = (menu.sel + 1) % menu.items.length;
+    else if (k === 'Enter') { if (mode === 'end' && performance.now() - endAt < 700) return; menu.items[menu.sel].fn(); }
+    else if (k === 'Escape' && menu.back) menu.back();
+  }
+}
+cv.addEventListener('pointerdown', e => {
+  const r = cv.getBoundingClientRect(), x = (e.clientX - r.left) * W / r.width, y = (e.clientY - r.top) * H / r.height;
+  for (let i = zones.length - 1; i >= 0; i--) { const z = zones[i]; if (x >= z.x && x < z.x + z.w && y >= z.y && y < z.y + z.h) { z.fn(); return; } }
+});
+function readInput() {
+  const g = pad();
+  let mx = g.lx, my = g.ly;
+  if (Math.hypot(mx, my) < 0.22) { mx = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0); my = (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0); }
+  const f = flip() ? -1 : 1;                                    // the screen to the pitch: up is +z; right is +x (or -x on the mirrored pitch)
+  const inp = {mx: mx * f, mz: -my, ax: g.rx * f, az: -g.ry, a: pend.a, x: pend.x};
+  pend.a = pend.x = false;
+  return inp;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// the loop
+let last = 0, fps = 0, fpsN = 0, fpsT = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  fpsN++; if (now - fpsT >= 1000) { fps = Math.round(fpsN * 1000 / (now - fpsT)); fpsN = 0; fpsT = now; }
+  if (window.GameExt && GameExt.away()) { last = 0; return; }   // the match is on the big screen: the splash is up, nothing runs here
+  const dt = Math.min(0.05, last ? (now - last) / 1000 : 0); last = now;
+  zones.length = 0;
+  if (mode === 'play' && S) {
+    Q.step(S, dt, readInput());
+    if (S.over) openEnd();
+  }
+  ctx.clearRect(0, 0, W, H);
+  if (mode === 'title') { drawTitle(); return; }
+  if (mode === 'how') { drawHow(); return; }
+  if (mode === 'setup') { drawSetup(); return; }
+  box(0, 0, W, H, '#060a10');
+  if (S) { drawMatch(now); drawHud(); }
+  if (menu && (mode === 'pause' || mode === 'end')) { box(0, FIELD_Y, W, FIELD_H, 'rgba(0,0,0,0.45)'); drawMenu(); }
+  if (mode === 'play') zone(0, 0, W, H, () => {});
+}
+
+// ---------------------------------------------------------------------------------------------------
+// state: the app comes back to the same place (a match in progress comes back paused)
+let savedView = 'top';
+function snapshot() {
+  const live = S && !S.over;
+  return {cfg, view, S: live ? Q.snapshot(S) : null};
+}
+function saveNow(forget) { Platform.state.set(forget ? {cfg, view, S: null} : snapshot()); }
+function restore(s) {
+  if (s && s.cfg) cfg = Object.assign(cfg, s.cfg);
+  if (s && s.view) { view = s.view; savedView = s.view; }
+  menu = null;
+  if (s && s.S && s.S.v === 1 && Array.isArray(s.S.players) && s.S.players.length === 14) { S = Q.restore(s.S); openPause(); return; }
+  openTitle();
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden && mode === 'play') openPause(); });
+
+const firstState = Platform.state.get().then(restore).catch(openTitle);
+openTitle();
+requestAnimationFrame(frame);
+// with an external screen the match is on it (and the console shows the splash); the same page serves both screens (docs/system-api.md)
+// Caroline's tools (manifest "caroline"): what is going on, a match started, paused, resumed; they work on whichever screen the match is on (GameExt.tools)
+const r1 = v => Math.round(v * 10) / 10;
+function statusObj() {
+  const o = {screen: window.GameExt && GameExt.big ? 'big' : 'console', mode, camera: view, fps, setup: cfg, setupRow};
+  if (menu) o.menu = {title: menu.title, items: menu.items.map(it => typeof it.label === 'function' ? it.label() : it.label), sel: menu.sel};
+  if (S) {
+    const me = S.players[S.human], q = S.quaffle, sn = S.snitch;
+    Object.assign(o, {
+      time: r1(S.time), score: S.score, over: S.over, result: S.result, difficulty: S.difficulty, team: S.humanTeam,
+      me: {name: me.name, role: me.role, x: r1(me.x), y: r1(me.y), z: r1(me.z), stunned: r1(me.stunTime), aim: [r1(me.aimx || 0), r1(me.aimz || 0)],
+           hasQuaffle: q.carrier === me.id, hasBludger: S.bludgers.some(b => b.carrier === me.id)},
+      quaffle: {x: r1(q.x), z: r1(q.z), carrier: q.carrier >= 0 ? S.players[q.carrier].name : null, flying: q.flying},
+      bludgers: S.bludgers.map(b => ({x: r1(b.x), z: r1(b.z), carrier: b.carrier >= 0 ? S.players[b.carrier].name : null, flying: b.flying})),
+      snitch: {x: r1(sn.x), y: r1(sn.y), z: r1(sn.z), tired: sn.window > 0}, hints: Q.hints(S), message: S.msgs.length ? S.msgs[S.msgs.length - 1].text : null,
+    });
+  }
+  return o;
+}
+function slotOf(v) {
+  if (Number.isInteger(v)) return v;
+  const want = String(v || '').toLowerCase().replace(/[^a-z0-9]/g, ''), roster = Q.ROSTER[cfg.team];
+  const i = roster.findIndex(r => r.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(want) || r.file.endsWith(want) || r.role === want);
+  return i < 0 ? null : i;
+}
+GameExt.tools({
+  status: async () => JSON.stringify(statusObj()),
+  start_match: async a => {
+    const t = String(a.team || cfg.team).toLowerCase();
+    cfg.team = t === 'b' || t.startsWith('s') ? 'B' : 'A';
+    if (a.player !== undefined && a.player !== '') { const s = slotOf(isNaN(Number(a.player)) ? a.player : Number(a.player)); if (s === null || s < 0 || s > 6) throw new Error('player: a slot 0..6 (0 keeper, 1-3 chasers, 4-5 beaters, 6 seeker), a role or a name'); cfg.slot = s; }
+    if (a.difficulty) { if (!DIFFS.includes(a.difficulty)) throw new Error('difficulty: easy, normal or hard'); cfg.difficulty = a.difficulty; }
+    S = Q.create({team: cfg.team, slot: cfg.slot, difficulty: cfg.difficulty, seed: Number.isInteger(a.seed) ? a.seed : undefined});
+    menu = null; mode = 'play'; pend.a = pend.x = false;
+    return JSON.stringify(statusObj());
+  },
+  pause: async () => { if (mode === 'play') openPause(); return JSON.stringify(statusObj()); },
+  resume: async () => { if (mode === 'pause') { menu = null; mode = 'play'; } return JSON.stringify(statusObj()); },
+});
+GameExt.init({id: 'quidditch', title: 'Quidditch', splash: 'assets/splash_console.webp', text: 'Playing on the big screen', snapshot, restore, save: () => saveNow(), ready: firstState});
+</script>

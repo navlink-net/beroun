@@ -1,0 +1,194 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Clock</title>
+<meta name="viewport" content="width=640,height=480">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #tabs { flex: none; display: flex; background: #000; }
+  .tab { flex: 1; text-align: center; padding: 10px 0; font-size: 18px; color: #8a949e; border-bottom: 3px solid transparent; }
+  .tab.focus { background: #1d242b; }
+  .tab.on { color: #f2a900; border-color: #f2a900; }
+  #body { flex: 1; min-height: 0; padding: 12px 18px; position: relative; }
+  .big { font-size: 96px; font-weight: bold; text-align: center; margin-top: 50px; color: #f2a900; font-variant-numeric: tabular-nums; }
+  .sub { text-align: center; font-size: 26px; color: #8a949e; margin-top: 8px; }
+  .hint { position: absolute; left: 18px; right: 18px; bottom: 8px; font-size: 14px; color: #6c7780; text-align: center; }
+  .row { display: flex; align-items: center; padding: 8px 12px; margin-bottom: 4px; border-radius: 6px; background: #1d242b; font-size: 26px; }
+  .row.sel { background: #f2a900; color: #000; }
+  .row .t { width: 130px; font-weight: bold; font-variant-numeric: tabular-nums; }
+  .row .d { flex: 1; font-size: 16px; opacity: .8; }
+  .row .o { font-size: 18px; }
+  .row.off:not(.sel) { opacity: .5; }
+  #ring { position: absolute; inset: 0; background: #b3261e; display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 5; }
+  #ring.on { display: flex; }
+  #ring .big { color: #fff; margin: 0; }
+</style>
+<div id="tabs"></div>
+<div id="body"></div>
+<div id="ring"><div class="big" id="rt"></div><div class="sub" id="rl" style="color:#fff"></div><div id="rb" style="display:flex;gap:16px;margin-top:30px"></div></div>
+<script src="/platform.js"></script>
+<script>
+  const API = '/api/app/clock/';
+  const TABS = ['clock', 'alarms', 'timer', 'stopwatch'], NAMES = {clock: 'Clock', alarms: 'Alarms', timer: 'Timer', stopwatch: 'Stopwatch'};
+  const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const pad = n => String(n).padStart(2, '0');
+  const get = p => fetch(API + p).then(r => r.json());
+  const post = (p, b) => fetch(API + p, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b || {})}).then(r => r.json());
+
+  let zone = 'tabs', ringSel = 0, tab = 'clock', alarms = [], sel = 0, edit = null, field = 0, tm = null, tmSet = 300, local = null, epoch = 0, offset = 0;
+  let sw = {running: false, start: 0, acc: 0, laps: []}, ringing = null;
+
+  async function sync() {
+    const st = await Platform.time.status();
+    local = st.local; epoch = st.epoch; offset = Date.now() / 1000 - st.epoch;
+  }
+  const nowEpoch = () => Date.now() / 1000 - offset;
+  async function reload() {
+    alarms = (await get('alarms')).alarms || [];
+    tm = (await get('timer')).timer;
+    sel = Math.min(sel, alarms.length);
+  }
+
+  function daysText(a) { return !a.days.length ? Platform.t('Once') : a.days.length === 7 ? Platform.t('Every day') : a.days.map(d => Platform.t(DAYS[d])).join(' '); }
+  function fmtMs(ms) { const s = ms / 1000; return pad(Math.floor(s / 60)) + ':' + pad(Math.floor(s % 60)) + '.' + pad(Math.floor(ms % 1000 / 10)); }
+
+  // the page is only rebuilt when its markup changes (a finger that went down on a button must find it still there when it comes up); a number that ticks (".big") is changed in place
+  function put(el, html) {
+    const m = html.match(/(<div class="big"[^>]*>)([^<]*)(<\/div>)/);
+    const key = m ? html.replace(m[0], m[1] + m[3]) : html;
+    if (el._k === key) { const big = el.querySelector('.big'); if (big && m) big.textContent = m[2]; return; }
+    el._k = key;
+    el.innerHTML = html;
+  }
+
+  function draw() {
+    put(document.getElementById('tabs'), TABS.map(t => `<div class="tab${t === tab ? ' on' : ''}${zone === 'tabs' && t === tab ? ' focus' : ''}" data-tab="${t}">${Platform.t(NAMES[t])}</div>`).join(''));
+    const body = document.getElementById('body'), b = {set innerHTML(h) { put(body, h); }};
+    const d = new Date(nowEpoch() * 1000);
+    if (tab === 'clock') {
+      const l = local || {hour: d.getHours(), minute: d.getMinutes(), second: d.getSeconds(), year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate()};
+      const s = Math.floor(nowEpoch() - epoch) + l.second, secs = (l.hour * 3600 + l.minute * 60 + s) % 86400;
+      b.innerHTML = `<div class="big">${pad(Math.floor(secs / 3600))}:${pad(Math.floor(secs % 3600 / 60))}:${pad(secs % 60)}</div>
+        <div class="sub">${l.year}-${pad(l.month)}-${pad(l.day)}</div>`;
+    } else if (tab === 'alarms' && edit) {
+      const f = [pad(edit.hour), pad(edit.minute), daysText(edit), edit.enabled ? Platform.t('On') : Platform.t('Off'), Platform.t('Delete'), Platform.t('Save')];
+      const n = [Platform.t('Hour'), Platform.t('Minute'), Platform.t('Days'), Platform.t('Alarm'), '', ''];
+      b.innerHTML = f.map((v, i) => `<div class="row${i === field ? ' sel' : ''}" data-field="${i}"><span class="t" style="width:200px;font-size:18px">${n[i]}</span><span class="t">${v}</span></div>`).join('') +
+        `<div class="hint">↑/↓ ${Platform.t('field')} · ←/→ ${Platform.t('change')} · A · B ${Platform.t('back')}</div>`;
+    } else if (tab === 'alarms') {
+      b.innerHTML = alarms.map((a, i) => `<div class="row${zone === 'body' && i === sel ? ' sel' : ''}${a.enabled ? '' : ' off'}" data-row="${i}"><span class="t">${pad(a.hour)}:${pad(a.minute)}</span>
+        <span class="d">${daysText(a)}${a.label ? ' · ' + a.label : ''}</span><span class="o" data-toggle="${i}">${a.enabled ? Platform.t('On') : Platform.t('Off')}</span></div>`).join('') +
+        `<div class="row${zone === 'body' && sel === alarms.length ? ' sel' : ''}" data-row="${alarms.length}"><span class="d" style="font-size:22px">+ ${Platform.t('New alarm')}</span></div>
+        `;
+    } else if (tab === 'timer') {
+      const left = tm ? Math.max(0, Math.ceil(tm.end - nowEpoch())) : tmSet;
+      const btn = (i, t) => `<div class="row${zone === 'body' && sel === i ? ' sel' : ''}" data-item="${i}"><span class="d" style="text-align:center;font-size:22px">${t}</span></div>`;
+      b.innerHTML = `<div class="big" style="margin-top:10px;font-size:80px">${pad(Math.floor(left / 3600))}:${pad(Math.floor(left % 3600 / 60))}:${pad(left % 60)}</div>` +
+        (tm ? btn(0, Platform.t('Cancel')) : btn(0, '‹ ' + Math.round(tmSet / 60) + ' ' + Platform.t('Minutes') + ' ›') + btn(1, Platform.t('Start')));
+    } else {
+      const ms = sw.acc + (sw.running ? Date.now() - sw.start : 0);
+      const btn = (i, t) => `<div class="row${zone === 'body' && sel === i ? ' sel' : ''}" data-item="${i}"><span class="d" style="text-align:center;font-size:22px">${t}</span></div>`;
+      b.innerHTML = `<div class="big" style="margin-top:6px;font-size:72px">${fmtMs(ms)}</div>
+        <div class="sub" style="font-size:18px;margin-bottom:6px">${sw.laps.slice(-3).reverse().map((l, i) => (sw.laps.length - i) + '. ' + fmtMs(l)).join(' &nbsp; ') || '&nbsp;'}</div>` +
+        btn(0, Platform.t(sw.running ? 'Stop' : 'Start')) + btn(1, Platform.t('Lap')) + btn(2, Platform.t('Reset'));
+    }
+    const r = document.getElementById('ring');
+    r.classList.toggle('on', !!ringing);
+    if (ringing) {
+      document.getElementById('rt').textContent = ringing.kind === 'timer' ? '00:00' : pad(ringing.hour) + ':' + pad(ringing.minute);
+      put(document.getElementById('rb'), ['Stop', 'Snooze'].map((t, i) => `<div class="row${ringSel === i ? ' sel' : ''}" data-ring="${i}" style="padding:10px 28px">${Platform.t(t)}</div>`).join(''));
+      document.getElementById('rl').textContent = ringing.label || Platform.t(ringing.kind === 'timer' ? 'Timer' : 'Alarm');
+    }
+  }
+
+  async function save() { await post('alarms/save', edit); edit = null; await reload(); }
+
+  // keys: the cursor (arrows), A = Enter, B = Escape and nothing else. zone "tabs": ←/→ change the tab; zone "body": ↑/↓ move through the items, Enter does the item
+  const items = () => tab === 'timer' ? [tm ? 'cancel' : 'minutes', 'go'] : tab === 'stopwatch' ? ['run', 'lap', 'reset'] : [];
+  async function key(k) {
+    if (ringing) {   // two buttons chosen with the cursor: stop, snooze
+      if (k === 'ArrowLeft' || k === 'ArrowRight') ringSel = 1 - ringSel;
+      else if (k === 'Enter') { await post(ringSel ? 'ringing/snooze' : 'ringing/dismiss'); ringing = null; ringSel = 0; }
+      return;
+    }
+    if (edit) {
+      if (k === 'ArrowUp') field = Math.max(0, field - 1);
+      else if (k === 'ArrowDown') field = Math.min(5, field + 1);
+      else if (k === 'Escape') edit = null;
+      else if (k === 'ArrowLeft' || k === 'ArrowRight') {
+        const s = k === 'ArrowRight' ? 1 : -1;
+        if (field === 0) edit.hour = (edit.hour + s + 24) % 24;
+        else if (field === 1) edit.minute = (edit.minute + s * 5 + 60) % 60;
+        else if (field === 2) edit.days = nextDays(edit.days, s);
+        else if (field === 3) edit.enabled = !edit.enabled;
+      } else if (k === 'Enter') {
+        if (field === 4) { if (edit.id) await post('alarms/delete', {id: edit.id}); edit = null; await reload(); }
+        else if (field === 5) await save();
+        else if (field === 3) edit.enabled = !edit.enabled;
+      }
+      return;
+    }
+    if (k === 'Escape') return Platform.exit();
+    const n = tab === 'alarms' ? alarms.length + 1 : items().length;
+    if (zone === 'tabs') {
+      if (k === 'ArrowLeft' || k === 'ArrowRight') { tab = TABS[(TABS.indexOf(tab) + (k === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length]; sel = 0; }
+      else if (k === 'ArrowDown' && n) zone = 'body';
+      return;
+    }
+    if (k === 'ArrowUp') { if (sel === 0) zone = 'tabs'; else sel--; return; }
+    if (k === 'ArrowDown') { sel = Math.min(n - 1, sel + 1); return; }
+    if (tab === 'alarms') {
+      if (k === 'Enter') { edit = sel < alarms.length ? {...alarms[sel]} : {hour: 7, minute: 0, days: [], label: '', enabled: true}; field = 0; }
+    } else if (tab === 'timer') {
+      const it = items()[sel];
+      if (it === 'minutes' && (k === 'ArrowLeft' || k === 'ArrowRight')) tmSet = Math.min(86400, Math.max(60, tmSet + (k === 'ArrowRight' ? 60 : -60)));
+      else if (k === 'Enter' && it === 'cancel') { await post('timer/cancel'); tm = null; sel = 0; }
+      else if (k === 'Enter' && it === 'go') tm = (await post('timer/start', {seconds: tmSet})).timer;
+    } else if (tab === 'stopwatch' && k === 'Enter') {
+      const it = items()[sel];
+      if (it === 'run') { if (sw.running) sw.acc += Date.now() - sw.start; else sw.start = Date.now(); sw.running = !sw.running; }
+      else if (it === 'lap' && sw.running) sw.laps.push(sw.acc + Date.now() - sw.start);
+      else if (it === 'reset') sw = {running: false, start: 0, acc: 0, laps: []};
+    }
+  }
+  // the weekdays: right goes through "once", each single day, weekdays, every day
+  const PRESETS = [[], [0], [1], [2], [3], [4], [5], [6], [0, 1, 2, 3, 4], [5, 6], [0, 1, 2, 3, 4, 5, 6]];
+  function nextDays(days, s) {
+    let i = PRESETS.findIndex(p => p.join() === days.join());
+    return PRESETS[(i + s + PRESETS.length) % PRESETS.length];
+  }
+
+  // the touch screen: a tap does what the cursor and A do. The tabs, the rows, the buttons; in the editor and on "minutes" the left half of the row is "less", the right half "more"
+  addEventListener('click', async e => {
+    const q = s => e.target.closest(s);
+    const half = el => e.clientX < el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2 ? 'ArrowLeft' : 'ArrowRight';
+    let el;
+    if ((el = q('[data-ring]'))) { ringSel = +el.dataset.ring; await key('Enter'); }
+    else if (ringing) return;
+    else if ((el = q('[data-tab]'))) { tab = el.dataset.tab; zone = 'tabs'; sel = 0; edit = null; }
+    else if ((el = q('[data-toggle]')) && !edit) { const a = alarms[+el.dataset.toggle]; if (a) { await post('alarms/toggle', {id: a.id}); await reload(); } }
+    else if (edit && (el = q('[data-field]'))) { field = +el.dataset.field; await key(field <= 3 ? half(el) : 'Enter'); }
+    else if (!edit && (el = q('[data-row]'))) { zone = 'body'; sel = +el.dataset.row; await key('Enter'); }
+    else if (!edit && (el = q('[data-item]'))) { zone = 'body'; sel = +el.dataset.item; await key(items()[sel] === 'minutes' ? half(el) : 'Enter'); }
+    draw();
+  });
+
+  addEventListener('keydown', e => { if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape'].includes(e.key)) { e.preventDefault(); key(e.key).then(draw); } });
+
+  Platform.onClose(() => Platform.state.set({tab, tmSet}));
+  Platform.state.get().then(s => { if (s) { if (TABS.includes(s.tab)) tab = s.tab; if (s.tmSet > 0) tmSet = s.tmSet; draw(); } });
+
+  // an alarm that rings takes the window over (alarmd): the page asks it twice a second
+  setInterval(async () => { try { ringing = (await get('ringing')).ringing; } catch (e) {} draw(); }, 500);
+  setInterval(() => sync().catch(() => {}), 30000);
+  Promise.all([sync(), reload()]).catch(() => {}).then(draw);
+
+  // Caroline's tools for this page
+  Platform.tools.handle('show_tab', async args => {
+    if (!TABS.includes(args.tab)) return 'Tabs: ' + TABS.join(', ');
+    tab = args.tab; edit = null; draw(); return tab;
+  });
+  Platform.tools.handle('current_view', async () => `tab ${tab}` + (tab === 'alarms' ? ': ' + (alarms.map(a => `${pad(a.hour)}:${pad(a.minute)} ${a.enabled ? 'on' : 'off'}`).join(', ') || 'no alarms') : ''));
+</script>

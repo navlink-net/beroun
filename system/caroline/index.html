@@ -1,0 +1,93 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=640,initial-scale=1">
+<title>Caroline</title>
+<script src="/platform.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #12151a; overflow: hidden; font: 14px sans-serif; }
+  #strip { display: flex; height: 30px; background: #3a3f8f; color: #fff; }
+  #strip button { background: transparent; color: #fff; border: 0; border-radius: 0; padding: 0 12px; font: inherit; }
+  #strip button.active { background: #5560c8; }
+  #strip .x { padding: 0 6px; opacity: .7; }
+  #strip .sp { flex: 1; }
+  #frames { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; display: none; }
+  iframe.active { display: block; }
+</style>
+</head>
+<body>
+<div id="strip"></div>
+<div id="frames"></div>
+<script>
+// Caroline in the text chat mode: the first tile of the launcher, an ordinary app (MODE closes it). Her own chat.html (served by
+// shelld at port 48767) in one iframe per tab, with this page as the tab strip. In Caroline's shells each tab is a separate web
+// view; one iframe per tab is far lighter for 2 GB. Voice input and the playing of answers are her own, one message at a time, as in
+// any text chat. The continuous voice dialogue is another thing: the R2 button (system/caroline-voice).
+// The backend keeps the conversations, so closing and reopening the app loses nothing but the page state.
+const OFF = Number(location.port) - 8765;   // a simulator with an instance name has every port shifted (scripts/lib.sh)
+const MAX_TABS = 5, BACKEND_PORT = 48765 + OFF, PAGE_PORT = 48767 + OFF;
+const KEY = 'tabs';
+let tabs = ['1'], active = '1', names = {};
+
+function frameOf(id) { return document.getElementById('f' + id); }
+function addFrame(id) {
+  const f = document.createElement('iframe');
+  f.id = 'f' + id;
+  f.allow = 'microphone; autoplay';  // her page records speech itself (getUserMedia) and plays the answers
+  f.src = `http://127.0.0.1:${PAGE_PORT}/chat.html?port=${BACKEND_PORT}&tab=${encodeURIComponent(id)}`;
+  document.getElementById('frames').appendChild(f);
+}
+function render() {
+  const s = document.getElementById('strip');
+  s.textContent = '';
+  for (const id of tabs) {
+    const b = document.createElement('button');
+    b.textContent = names[id] || ('Tab ' + id);
+    if (id === active) b.className = 'active';
+    b.onclick = () => select(id);
+    s.appendChild(b);
+    if (tabs.length > 1 && id === active) {
+      const x = document.createElement('button');
+      x.textContent = '×'; x.className = 'x'; x.onclick = () => closeTab(id);
+      s.appendChild(x);
+    }
+  }
+  const sp = document.createElement('span'); sp.className = 'sp'; s.appendChild(sp);
+  if (tabs.length < MAX_TABS) {
+    const p = document.createElement('button'); p.textContent = '+'; p.onclick = newTab; s.appendChild(p);
+  }
+  for (const id of tabs) frameOf(id).className = id === active ? 'active' : '';
+}
+function select(id) { active = id; render(); save(); }
+function newTab() {
+  let n = 1; while (tabs.includes(String(n))) n++;
+  const id = String(n); tabs.push(id); addFrame(id); select(id);
+}
+function closeTab(id) {
+  if (tabs.length <= 1) return;
+  tabs = tabs.filter(t => t !== id); frameOf(id).remove();
+  if (active === id) active = tabs[0];
+  render(); save();
+}
+function save() { Platform.db.set(KEY, {tabs, active, names}).catch(() => {}); }
+
+(async () => {
+  try {
+    const st = await Platform.db.get(KEY);
+    if (st && Array.isArray(st.tabs) && st.tabs.length) { tabs = st.tabs.slice(0, MAX_TABS); active = tabs.includes(st.active) ? st.active : tabs[0]; names = st.names || {}; }
+  } catch (e) {}
+  tabs.forEach(addFrame);
+  render();
+  // started by the Settings app: her settings panel opens in the first tab, once the page is ready
+  let arg = null; try { arg = await Platform.launchArg(); } catch (e) {}
+  if (arg && arg.settings) {
+    const f = frameOf(active);
+    f.addEventListener('load', () => setTimeout(() => f.contentWindow.postMessage({caroline: 'host', msg: {type: 'open_settings'}}, '*'), 500));
+  }
+})();
+</script>
+</body>
+</html>

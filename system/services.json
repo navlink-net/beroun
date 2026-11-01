@@ -1,0 +1,11 @@
+[
+  {"id": "caroline-backend", "name": "Caroline (the assistant when she is in the slot, and always the host of Communicator: the messaging store and adapters are in her backend)",
+   "host": "module", "module": "caroline",
+   "start": "system", "privileged": true, "priority": 100, "memory_mb": 350, "sleep": true, "takeover": true},
+  {"id": "claude-backend", "name": "Claude (the assistant when it is in the slot: its backend and the Claude Code CLI of each conversation)",
+   "host": "module", "module": "claude",
+   "start": "system", "privileged": true, "priority": 100, "memory_mb": 700, "sleep": true, "takeover": false},
+  {"id": "codex-backend", "name": "Codex (the assistant when it is in the slot: its backend and the Codex CLI of each turn)",
+   "host": "module", "module": "codex",
+   "start": "system", "privileged": true, "priority": 100, "memory_mb": 400, "sleep": true, "takeover": false}
+]

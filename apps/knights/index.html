@@ -1,0 +1,624 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Knights &amp; Ladies</title>
+<meta name="viewport" content="width=640,height=480">
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #140d05; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; height: 100%; width: auto; max-width: 100%; aspect-ratio: 4 / 3; }   /* 4:3 on any screen: the console as it is, the big screen with bars at the sides */
+</style>
+<canvas id="c" width="640" height="480"></canvas>
+<script src="/platform.js"></script>
+<script src="/gameext.js"></script>
+<script src="engine.js"></script>
+<script>
+// Knights & Ladies, single player: a tournament of eight knights and eight ladies; you play one of them, the
+// other fifteen are NPCs. Seven rounds of bouts, no server. Buttons: arrows move, A confirms, B goes back or opens the menu.
+// The touchscreen: a tap on a menu item or a partner acts; on an avatar or a row of the prepare screen the first tap chooses and the second
+// acts (◀ ▶ change the gear); the hint bar's A / B parts are buttons; in a bout a tap is A, and a lady casts by tapping a spell.
+const E = Engine;
+const W = 640, H = 480;
+const F = '"DejaVu Sans", sans-serif';
+const GOLD = '#d4af37', PALE = '#e8d5a3', DIM = '#8a8070', PANEL = 'rgba(20,12,4,0.93)';
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+// outside the console (a plain browser) there is no Platform: a stand-in keeps the page working
+if (!window.Platform) window.Platform = {state: {get: () => Promise.resolve(null), set: () => Promise.resolve()}, onClose() {}, exit() {}};
+
+// ---------------------------------------------------------------------------------------------------
+// pictures
+const pics = {};
+function pic(name) {
+  if (!pics[name]) { const i = new Image(); i.src = 'assets/' + name; pics[name] = i; }
+  const i = pics[name]; return i.complete && i.naturalWidth ? i : null;
+}
+['bg_menu.jpg', 'bg_arena.jpg', 'emblem.png'].forEach(pic);
+for (const [pre, vals] of [['armor', E.ArmorType], ['horse', E.HorseType], ['weapon', E.WeaponType], ['med', E.MedicineType], ['dress', E.DressType], ['acc', E.AccessoryType], ['potion', E.PotionType]]) Object.values(vals).forEach(v => pic('inv/' + pre + '_' + v + '.png'));
+for (let n = 1; n <= 8; n++) { const s = String(n).padStart(2, '0'); ['avatar/k' + s, 'avatar/l' + s].forEach(a => pic(a + '.png')); ['charge', 'fallen'].forEach(t => pic('knights/k' + s + '_' + t + '.png')); }
+
+// ---------------------------------------------------------------------------------------------------
+// state
+let T = null;                       // the tournament
+let ui = {screen: 'title'};
+let saved = null;
+const pretty = v => { const s = String(v).replace('fullplate', 'full plate').replace(/_/g, ' '); return s[0].toUpperCase() + s.slice(1); };
+const sgn = n => (n > 0 ? '+' : '') + n;
+const pct = n => Math.round(n * 100) + '%';
+const avNo = url => (url && /[kl](\d+)\.png/.exec(url) || [0, '01'])[1];
+
+// the options of the prepare screen
+const GEAR = {
+  knight: [
+    {key: 'armor', label: 'Armor', values: Object.values(E.ArmorType), icon: v => 'inv/armor_' + v, info: v => 'Defense ' + E.ARMOR_STATS[v].defense},
+    {key: 'horse', label: 'Horse', values: Object.values(E.HorseType), icon: v => 'inv/horse_' + v, info: v => 'Power ' + sgn(E.HORSE_STATS[v].powerMod)},
+    {key: 'weapon', label: 'Weapon', values: Object.values(E.WeaponType), icon: v => 'inv/weapon_' + v, info: v => 'Attack ' + E.WEAPON_STATS[v].attack},
+    {key: 'medicine', label: 'Medicine', values: Object.values(E.MedicineType), icon: v => 'inv/med_' + v, info: v => '+' + E.MEDICINE_STATS[v].hpBonus + '% health each round'},
+  ],
+  lady: [
+    {key: 'dress', label: 'Dress', values: Object.values(E.DressType), icon: v => 'inv/dress_' + v,
+     info: v => { const d = E.DRESS_STATS[v]; return 'Attack x' + d.atkWeight + '  Defense x' + d.defWeight + (v === 'mystic' ? '  +20 magic' : v === 'enchanted' ? '  spells cost 5 less' : ''); }},
+    {key: 'accessory', label: 'Accessory', values: Object.values(E.AccessoryType), icon: v => 'inv/acc_' + v, info: v => E.ACCESSORY_STATS[v].spells.map(s => E.SPELL_DEFINITIONS[s].name).join(', ')},
+    {key: 'potion', label: 'Potion', values: Object.values(E.PotionType), icon: v => 'inv/potion_' + v,
+     info: v => { const p = E.POTION_STATS[v]; return p.mpBonus ? '+' + p.mpBonus + ' magic' : p.spellCostDiscount ? 'spells cost ' + p.spellCostDiscount + ' less' : p.buffDurationBonus ? 'buffs last longer' : 'curses last longer'; }},
+  ],
+};
+
+// ---------------------------------------------------------------------------------------------------
+// drawing helpers
+function txt(s, x, y, size, color, align, bold) {
+  ctx.font = (bold ? 'bold ' : '') + size + 'px ' + F;
+  ctx.textAlign = align || 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = color || '#fff'; ctx.fillText(s, x, y);
+}
+function fit(s, maxW, size, bold) {
+  ctx.font = (bold ? 'bold ' : '') + size + 'px ' + F;
+  if (ctx.measureText(s).width <= maxW) return s;
+  while (s.length > 1 && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+  return s + '…';
+}
+function box(x, y, w, h, fill, line) {
+  ctx.fillStyle = fill || PANEL; ctx.fillRect(x, y, w, h);
+  if (line) { ctx.strokeStyle = line; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2); }
+}
+function bar(x, y, w, h, frac, color, back) {
+  ctx.fillStyle = back || 'rgba(255,255,255,0.12)'; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = color; ctx.fillRect(x, y, Math.max(0, Math.min(1, frac)) * w, h);
+}
+function img(name, x, y, w, h) { const i = pic(name); if (i) ctx.drawImage(i, x, y, w, h); else { ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(x, y, w, h); } }
+function backdrop(name, dim) {
+  const i = pic(name);
+  if (i) ctx.drawImage(i, (W - i.naturalWidth) / 2, 0); else { ctx.fillStyle = '#140d05'; ctx.fillRect(0, 0, W, H); }
+  ctx.fillStyle = 'rgba(0,0,0,' + (dim == null ? 0.55 : dim) + ')'; ctx.fillRect(0, 0, W, H);
+}
+// the hint bar: parts are text, or [text, key] - a part with a key is also a button for the touchscreen (it presses that key)
+function hint(parts) {
+  box(0, H - 28, W, 28, 'rgba(0,0,0,0.75)');
+  ctx.font = '13px ' + F;
+  const GAP = 28, ws = parts.map(p => ctx.measureText(Array.isArray(p) ? p[0] : p).width);
+  let x = (W - ws.reduce((a, b) => a + b, 0) - GAP * (parts.length - 1)) / 2;
+  parts.forEach((p, i) => {
+    const s = Array.isArray(p) ? p[0] : p;
+    if (Array.isArray(p)) { ctx.strokeStyle = '#6a5530'; ctx.lineWidth = 1; ctx.strokeRect(x - 7.5, H - 24.5, ws[i] + 15, 21); zone(x - GAP / 2, H - 28, ws[i] + GAP, 28, () => press(p[1])); }
+    txt(s, x, H - 9, 13, '#cbb98a');
+    x += ws[i] + GAP;
+  });
+}
+
+// the touchscreen: what is drawn in a frame registers where a tap on it acts; a tap runs the topmost zone under it
+let zones = [];
+function zone(x, y, w, h, fn) { zones.push({x, y, w, h, fn}); }
+cv.addEventListener('click', e => {
+  const r = cv.getBoundingClientRect(), x = (e.clientX - r.left) * W / r.width, y = (e.clientY - r.top) * H / r.height;
+  for (let i = zones.length - 1; i >= 0; i--) {
+    const z = zones[i];
+    if (x >= z.x && x < z.x + z.w && y >= z.y && y < z.y + z.h) { z.fn(x, y); return; }
+  }
+});
+const avatarOf = p => 'avatar/' + (p.role === 'knight' ? 'k' : 'l') + avNo(p.avatarUrl) + '.png';
+
+// a menu: {title, items: [{label, fn}], sel, back}
+let menu = null;
+function openMenu(title, items, back) { menu = {title, items, sel: 0, back}; }
+function drawMenu() {
+  const n = menu.items.length, w = 380, h = 84 + n * 40, x = (W - w) / 2, y = (H - h) / 2;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
+  zone(0, 0, W, H, () => {});   // nothing under the menu hears a tap (and a tap beside it does not quit the game)
+  box(x, y, w, h, PANEL, GOLD);
+  txt(menu.title, W / 2, y + 44, 24, GOLD, 'center', true);
+  menu.items.forEach((it, i) => {
+    const iy = y + 66 + i * 40;
+    zone(x + 24, iy - 4, w - 48, 40, () => { menu.sel = i; it.fn(); });
+    if (i === menu.sel) { ctx.fillStyle = GOLD; ctx.fillRect(x + 24, iy, w - 48, 32); }
+    txt(it.label, W / 2, iy + 22, 18, i === menu.sel ? '#1a1208' : PALE, 'center', true);
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------
+// screens: title, role, avatar, how
+function openTitle() {
+  ui = {screen: 'title'};
+  const items = [];
+  if (saved) items.push({label: 'Continue', fn: () => { menu = null; resume(); }});
+  items.push({label: 'New tournament', fn: () => { menu = null; ui = {screen: 'role'}; openRole(); }});
+  items.push({label: 'How to play', fn: () => { menu = null; ui = {screen: 'how'}; }});
+  items.push({label: 'Exit', fn: () => Platform.exit()});
+  openMenu('Knights & Ladies', items, () => Platform.exit());
+}
+function openRole() {
+  openMenu('Who are you?', [
+    {label: 'A knight', fn: () => { menu = null; ui = {screen: 'avatar', role: 'knight', sel: 0}; }},
+    {label: 'A lady', fn: () => { menu = null; ui = {screen: 'avatar', role: 'lady', sel: 0}; }},
+    {label: 'Back', fn: openTitle},
+  ], openTitle);
+}
+const SKILLS = {
+  knight: n => { const s = E.KNIGHT_AVATAR_SKILLS[n]; return [['Attack', s.atk], ['Defense', s.def], ['Stamina', s.sta]]; },
+  lady: n => { const s = E.LADY_AVATAR_SKILLS[n]; return [['Magic', s.mag], ['Influence', s.inf], ['Charm', s.cha]]; },
+};
+function drawAvatar() {
+  backdrop('bg_menu.jpg', 0.6);
+  txt('Choose your ' + (ui.role === 'knight' ? 'knight' : 'lady'), W / 2, 40, 24, GOLD, 'center', true);
+  const code = ui.role === 'knight' ? 'k' : 'l';
+  for (let i = 0; i < 8; i++) {
+    const x = 30 + (i % 4) * 150, y = 60 + Math.floor(i / 4) * 150, sel = i === ui.sel;
+    zone(x, y, 140, 140, () => { if (ui.sel === i) press('Enter'); else ui.sel = i; });   // the first tap chooses, the second plays
+    box(x, y, 140, 140, sel ? 'rgba(212,175,55,0.35)' : 'rgba(0,0,0,0.5)', sel ? GOLD : '#4a3a20');
+    img('avatar/' + code + String(i + 1).padStart(2, '0') + '.png', x + 22, y + 8, 96, 96);
+    const sk = SKILLS[ui.role](i);
+    txt(sk.map(([n, v]) => n[0] + v).join('  '), x + 70, y + 128, 14, PALE, 'center', true);
+  }
+  const sk = SKILLS[ui.role](ui.sel);
+  box(30, 365, 580, 60, PANEL, '#4a3a20');
+  sk.forEach(([n, v], j) => { txt(n, 50 + j * 190, 392, 15, PALE, 'left', true); bar(50 + j * 190, 402, 130, 10, v / 5, GOLD); });
+  hint(['Arrows choose', ['A: play this one', 'Enter'], ['B: back', 'Escape']]);
+}
+function drawHow() {
+  backdrop('bg_menu.jpg', 0.7);
+  box(30, 20, 580, 420, PANEL, GOLD);
+  txt('How to play', W / 2, 58, 24, GOLD, 'center', true);
+  const L = [
+    'Eight knights and eight ladies play seven rounds. You are one of them,',
+    'the other fifteen are NPCs.',
+    '',
+    'Each round you prepare: a knight picks armor, horse, weapon and medicine;',
+    'a lady picks a dress, an accessory and a potion. Then you choose up to three',
+    'partners: a knight picks ladies, a lady picks knights. The first choice counts most.',
+    '',
+    'Knights fight one bout a round. Their ladies strengthen them, and a lady',
+    'can cast spells during a bout (her accessory gives two) from her magic power.',
+    'Winners earn points, and so do the ladies who backed them.',
+    'Armor and weapon wear out; a defeated knight loses his armor and horse',
+    'to the winner. Most points after round seven wins.',
+  ];
+  L.forEach((l, i) => txt(l, 50, 92 + i * 26, 14, PALE));
+  zone(0, 0, W, H, () => press('Escape'));
+  hint([['A or B: back', 'Escape']]);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// prepare
+function rowsOf() {
+  const kind = T.me.role, gear = GEAR[kind];
+  return [...gear.map(g => ({type: 'gear', g})), {type: 'partners'}, {type: 'start'}];
+}
+function opponentOf() {
+  if (T.me.role !== 'knight') return null;
+  const p = T.roundPairs().find(p => p.knight1Id === T.me.id || p.knight2Id === T.me.id);
+  if (!p) return null;
+  return T.knight(p.knight1Id === T.me.id ? p.knight2Id : p.knight1Id);
+}
+function startPrepare() {
+  ui = {screen: 'prepare', row: 0};
+}
+function drawPrepare() {
+  const me = T.player, kind = T.me.role, rows = rowsOf();
+  backdrop('bg_menu.jpg', 0.72);
+  box(0, 0, W, 34, 'rgba(0,0,0,0.75)');
+  txt('Round ' + T.state.round + ' / ' + T.state.totalRounds, 12, 23, 16, GOLD, 'left', true);
+  if (kind === 'knight') { const o = opponentOf(); txt(o ? 'Your bout: against ' + o.name : 'No bout for you this round', W - 12, 23, 14, PALE, 'right'); }
+  else txt(me.title + '   ' + Math.round(me.points) + ' points', W - 12, 23, 14, PALE, 'right');
+
+  rows.forEach((r, i) => {
+    const y = 44 + i * 58, sel = i === ui.row;
+    zone(10, y, 400, 52, () => { if (ui.row !== i) ui.row = i; else press('Enter'); });   // the first tap chooses the row, the second acts
+    if (sel && r.type === 'gear') { zone(310, y, 50, 30, () => press('ArrowLeft')); zone(360, y, 50, 30, () => press('ArrowRight')); }   // ◀ ▶
+    box(10, y, 400, 52, sel ? 'rgba(212,175,55,0.28)' : 'rgba(0,0,0,0.5)', sel ? GOLD : '#4a3a20');
+    if (r.type === 'gear') {
+      const v = me[kind === 'knight' ? 'equipment' : 'outfit'][r.g.key];
+      img(r.g.icon(v) + '.png', 16, y + 6, 40, 40);
+      txt(r.g.label, 66, y + 20, 12, DIM);
+      txt(pretty(v), 66, y + 40, 17, PALE, 'left', true);
+      txt(fit(r.g.info(v), 300, 13), 400, y + 42, 13, '#cbb98a', 'right');
+      if (sel) txt('◀  ▶', 400, y + 20, 15, GOLD, 'right', true);
+    } else if (r.type === 'partners') {
+      const ids = kind === 'knight' ? me.chosenLadies : me.chosenKnights;
+      txt(kind === 'knight' ? 'Your ladies' : 'Your knights', 66, y + 20, 12, DIM);
+      txt('A: choose up to three', 66, y + 40, 13, '#cbb98a');
+      ids.forEach((id, j) => {
+        const p = id && (kind === 'knight' ? T.lady(id) : T.knight(id));
+        if (p) { img(avatarOf(p), 250 + j * 50, y + 4, 44, 44); txt(String(j + 1), 252 + j * 50, y + 18, 13, GOLD, 'left', true); }
+        else { box(250 + j * 50, y + 4, 44, 44, 'rgba(255,255,255,0.08)'); txt(String(j + 1), 272 + j * 50, y + 33, 16, DIM, 'center', true); }
+      });
+    } else {
+      txt('Start the round', 210, y + 33, 19, sel ? '#1a1208' : GOLD, 'center', true);
+      if (sel) { ctx.fillStyle = GOLD; ctx.fillRect(10, y, 400, 52); txt('Start the round', 210, y + 33, 19, '#1a1208', 'center', true); }
+    }
+  });
+
+  // the right side: you
+  box(420, 44, 210, 340, PANEL, '#4a3a20');
+  img(avatarOf(me), 462, 52, 96, 96);
+  txt(me.name + ', ' + me.title, 525, 168, 14, GOLD, 'center', true);
+  txt(Math.round(me.points) + ' points', 525, 186, 14, PALE, 'center');
+  if (kind === 'knight') {
+    const eq = me.baseStats, k = me;
+    [['Health', eq.maxHp, 160, '#c04040'], ['Attack', eq.attack, 30, '#d08030'], ['Defense', eq.defense, 25, '#4080d0']].forEach(([n, v, mx, c], i) => {
+      txt(n, 432, 214 + i * 24, 13, PALE); txt(String(v), 618, 214 + i * 24, 13, PALE, 'right'); bar(432, 218 + i * 24, 186, 5, v / mx, c);
+    });
+    txt('Wear', 432, 292, 12, DIM);
+    [['Armor', k.armorWornPct], ['Weapon', k.weaponWornPct], ['Health', k.healthWorn]].forEach(([n, v], i) => {
+      txt(n, 432, 312 + i * 20, 13, PALE); txt(pct(v), 618, 312 + i * 20, 13, PALE, 'right');
+    });
+    if (k.capturedArmors.length || k.capturedHorses.length) txt('Spoils: ' + k.capturedArmors.length + ' armor, ' + k.capturedHorses.length + ' horse', 432, 372, 12, '#cbb98a');
+  } else {
+    const s = E.getLadySkills(me.avatarUrl);
+    txt('Magic power ' + me.maxMagicPower, 432, 214, 14, PALE);
+    txt('Status ' + Math.round(me.status) + '%', 432, 238, 14, PALE); bar(432, 244, 186, 5, me.status / 100, '#d070c0');
+    txt('Spells', 432, 276, 12, DIM);
+    E.ACCESSORY_STATS[me.outfit.accessory].spells.forEach((sp, i) => {
+      const d = E.SPELL_DEFINITIONS[sp];
+      txt(d.name + ' (' + d.powerCost + ')', 432, 296 + i * 38, 14, PALE, 'left', true);
+      txt(fit(d.description, 190, 12), 432, 312 + i * 38, 12, '#cbb98a');
+    });
+  }
+  hint(['Up/Down choose', 'Left/Right change', ['A confirm', 'Enter'], ['B menu', 'Escape']]);
+}
+function prepareKey(k) {
+  const rows = rowsOf(), r = rows[ui.row], kind = T.me.role;
+  if (k === 'ArrowUp') ui.row = (ui.row + rows.length - 1) % rows.length;
+  else if (k === 'ArrowDown') ui.row = (ui.row + 1) % rows.length;
+  else if ((k === 'ArrowLeft' || k === 'ArrowRight') && r.type === 'gear') {
+    const me = T.player, cur = me[kind === 'knight' ? 'equipment' : 'outfit'], vals = r.g.values;
+    const i = vals.indexOf(cur[r.g.key]), n = vals[(i + (k === 'ArrowLeft' ? -1 : 1) + vals.length) % vals.length];
+    const next = {...cur, [r.g.key]: n};
+    if (kind === 'knight') T.setEquipment(next); else T.setOutfit(next);
+  } else if (k === 'Enter') {
+    if (r.type === 'partners') ui = {screen: 'pick', row: ui.row, sel: 0};
+    else if (r.type === 'start') runRound();
+    else if (r.type === 'gear') prepareKey('ArrowRight');
+  } else if (k === 'Escape') {
+    openMenu('Menu', [
+      {label: 'Resume', fn: () => { menu = null; }},
+      {label: 'How to play', fn: () => { menu = null; ui.back = 'prepare'; ui.screen = 'how2'; }},
+      {label: 'Main menu', fn: () => { saveNow(); saved = {T: T.save(), screen: 'prepare'}; openTitle(); }},
+      {label: 'Exit', fn: () => { saveNow(); Platform.exit(); }},
+    ], () => { menu = null; });
+  }
+}
+
+// partner picker
+function candidates() { return T.me.role === 'knight' ? T.state.ladies : T.state.knights; }
+function drawPick() {
+  const me = T.player, kind = T.me.role, list = candidates(), chosen = kind === 'knight' ? me.chosenLadies : me.chosenKnights;
+  backdrop('bg_menu.jpg', 0.72);
+  box(0, 0, W, 34, 'rgba(0,0,0,0.75)');
+  txt(kind === 'knight' ? 'Choose your ladies (the first counts most)' : 'Choose your knights (the first counts most)', 12, 23, 16, GOLD, 'left', true);
+  list.forEach((p, i) => {
+    const y = 40 + i * 46, sel = i === ui.sel, idx = chosen.indexOf(p.id);
+    zone(10, y, 620, 42, () => { ui.sel = i; press('Enter'); });
+    box(10, y, 620, 42, sel ? 'rgba(212,175,55,0.28)' : 'rgba(0,0,0,0.5)', sel ? GOLD : '#4a3a20');
+    img(avatarOf(p), 16, y + 2, 38, 38);
+    txt(fit(p.name, 170, 15, true), 64, y + 19, 15, PALE, 'left', true);
+    txt(p.title + ', ' + Math.round(p.points) + ' pts', 64, y + 36, 12, DIM);
+    const d = kind === 'knight'
+      ? p.outfit.dress + ' dress, ' + p.outfit.accessory + ', status ' + Math.round(p.status) + '%'
+      : pretty(p.equipment.armor) + ', ' + p.equipment.horse + ', ' + p.equipment.weapon + ', worn ' + pct(p.armorWornPct);
+    txt(fit(pretty(d), 270, 13), 480, y + 26, 13, '#cbb98a', 'right');
+    if (idx >= 0) { ctx.fillStyle = GOLD; ctx.beginPath(); ctx.arc(604, y + 21, 14, 0, 7); ctx.fill(); txt(String(idx + 1), 604, y + 27, 17, '#1a1208', 'center', true); }
+  });
+  hint(['Up/Down choose', ['A pick or drop', 'Enter'], ['B done', 'Escape']]);
+}
+function pickKey(k) {
+  const list = candidates(), kind = T.me.role, me = T.player;
+  const chosen = [...(kind === 'knight' ? me.chosenLadies : me.chosenKnights)];
+  if (k === 'ArrowUp') ui.sel = (ui.sel + list.length - 1) % list.length;
+  else if (k === 'ArrowDown') ui.sel = (ui.sel + 1) % list.length;
+  else if (k === 'Enter') {
+    const id = list[ui.sel].id, i = chosen.indexOf(id);
+    if (i >= 0) chosen[i] = null;
+    else { const f = chosen.indexOf(null); if (f >= 0) chosen[f] = id; }
+    T.setPartners(chosen);
+  } else if (k === 'Escape') ui = {screen: 'prepare', row: ui.row};
+}
+
+// ---------------------------------------------------------------------------------------------------
+// running a round
+function runRound() {
+  // quick bouts until one the human has a say in; then the live bout
+  for (;;) {
+    const pair = T.nextPair();
+    if (!pair) return roundDone();
+    if (T.isLive(pair)) return openBout(pair);
+    T.quickBout(pair);
+  }
+}
+function roundDone() { T.state.phase = 'standings'; ui = {screen: 'standings', tab: T.me.role === 'knight' ? 0 : 1}; }
+
+function openBout(pair) {
+  const b = T.makeBout(pair);
+  ui = {screen: 'bout', b, t0: performance.now(), intro: true, nextAt: 0, prev: [100, 100], cur: [100, 100], hpAt: 0, target: 0, spell: 0, msg: '', done: false};
+}
+function boutFinish() {
+  const b = ui.b;
+  while (!(b.tick && b.tick.finished)) T.stepBout(b);
+  ui.rec = T.finishBout(b);
+  ui.done = true; ui.doneAt = performance.now();
+}
+function myFighters() {                                  // the fighters this lady backs, by priority
+  const ids = T.meL.chosenKnights.filter(id => id === ui.b.k1.id || id === ui.b.k2.id);
+  return ids;
+}
+function boutUpdate(now) {
+  const b = ui.b;
+  if (ui.intro) { if (now - ui.t0 > 2200) { ui.intro = false; ui.nextAt = now + E.TICK_MS; } return; }
+  if (ui.done || document.hidden) return;
+  if (now >= ui.nextAt) {
+    const t = T.stepBout(b);
+    ui.msg = '';
+    ui.prev = ui.cur; ui.cur = [t.knight1.currentHp, t.knight2.currentHp]; ui.hpAt = now; ui.nextAt = now + E.TICK_MS;
+    if (t.finished) { ui.rec = T.finishBout(b); ui.done = true; ui.doneAt = now; }
+  }
+}
+function drawBout(now) {
+  const b = ui.b, k1 = b.k1, k2 = b.k2, ticks = E.ANIM_TICKS;
+  backdrop('bg_arena.jpg', 0.25);
+  zone(0, 0, W, H, () => { if (ui.intro || ui.done || T.me.role !== 'lady') press('Enter'); });   // a tap is A, except while a lady can cast
+  const tickIdx = b.tick ? b.tick.tick : 0;
+  const frac = ui.done ? 1 : Math.min(1, (now - ui.hpAt) / E.TICK_MS);
+  const prog = ui.done ? 1 : Math.min(1, (tickIdx - 1 + frac) / ticks);
+  const p0 = ui.intro ? 0 : Math.max(0, prog), ease = Math.sin(Math.min(1, p0) * Math.PI / 2);
+  const hp = i => ui.prev[i] + (ui.cur[i] - ui.prev[i]) * (ui.done ? 1 : Math.min(1, frac));
+
+  // bars
+  [[k1, 0, 16], [k2, 1, 344]].forEach(([k, i, x]) => {
+    box(x - 6, 6, 286, 52, 'rgba(0,0,0,0.6)');
+    txt(fit(k.name, 200, 14, true), x, 24, 14, PALE, 'left', true);
+    txt(k.title, x + 268, 24, 12, DIM, 'right');
+    const h = Math.max(0, hp(i)); bar(x, 32, 274, 14, h / 100, h > 40 ? '#3aa63a' : h > 20 ? '#d0a030' : '#c03030', 'rgba(120,0,0,0.5)');
+    txt('Health  ' + Math.round(h * k.baseStats.maxHp / 100) + ' / ' + k.baseStats.maxHp, x + 137, 44, 12, '#fff', 'center', true);
+  });
+  // the chance to win as it stands (the ladies' spells move it); who wins is not shown until the end
+  { const c1 = b.engine.chance1(), p1 = Math.round(c1 * 100);
+    bar(16, 108, 608, 6, c1, '#d4af37', '#5a4a28');
+    txt(p1 + '%', 16, 130, 12, PALE, 'left', true); txt('Chance to win', W / 2, 130, 11, DIM, 'center'); txt((100 - p1) + '%', 624, 130, 12, PALE, 'right', true); }
+
+  // knights
+  const loser = ui.done && b.tick ? (b.tick.loserId) : null;
+  const sprite = (k, side) => {
+    const n = avNo(k.avatarUrl), fallen = loser === k.id;
+    const im = pic('knights/k' + n + (fallen ? '_fallen' : '_charge') + '.png');
+    if (!im) return;
+    const h = fallen ? 100 : 190, w = im.naturalWidth * h / im.naturalHeight;
+    const startX = side === 0 ? -w * 0.3 : W + w * 0.3, stopX = side === 0 ? 215 : W - 215;
+    const x = startX + (stopX - startX) * ease;
+    const shake = ui.done && !fallen ? 0 : (ui.done ? 0 : (tickIdx > 0 ? Math.sin(now / 40) * 1.5 : 0));
+    ctx.save(); ctx.translate(x + shake, side === 0 ? 350 : 350);
+    if (side === 1) ctx.scale(-1, 1);
+    ctx.drawImage(im, -w / 2, -h, w, h);
+    ctx.restore();
+  };
+  sprite(k1, 0); sprite(k2, 1);
+  if (b.tick && b.tick.tick >= 1 && !ui.done) { ctx.fillStyle = 'rgba(255,230,160,' + (0.3 + 0.3 * Math.sin(now / 90)) + ')'; ctx.beginPath(); ctx.arc(W / 2, 290, 10 + 8 * ease, 0, 7); ctx.fill(); }
+
+  // ladies who back them
+  const backers = b.ladies;
+  backers.slice(0, 6).forEach((l, i) => {
+    const x = 10 + i * 46;
+    img(avatarOf(l), x, 62, 40, 40);
+    if (!l.isNPC) { ctx.strokeStyle = GOLD; ctx.lineWidth = 2; ctx.strokeRect(x, 62, 40, 40); }
+  });
+
+  // bottom panel
+  box(0, 372, W, 108, 'rgba(10,6,2,0.88)');
+  const lines = b.log.slice(-3);
+  if (T.me.role === 'lady') {
+    const mine = myFighters(), lady = T.meL;
+    if (!mine.length) txt('Neither of your knights fights here', 14, 396, 14, DIM);
+    else {
+      const spells = E.ACCESSORY_STATS[lady.outfit.accessory].spells;
+      const discount = (lady.outfit.potion === 'clarity' ? 5 : 0) + (lady.outfit.dress === 'enchanted' ? 5 : 0);
+      const own = mine[ui.target % mine.length], ownK = own === k1.id ? k1 : k2, enemyK = own === k1.id ? k2 : k1;
+      txt('You back ' + ownK.name, 14, 394, 14, GOLD, 'left', true);
+      if (!ui.intro && !ui.done) zone(0, 376, 420, 24, () => press('ArrowUp'));   // a tap on the name: the other knight you back
+      txt('Magic ' + Math.round(lady.magicPower) + ' / ' + lady.maxMagicPower, 626, 394, 14, PALE, 'right', true);
+      bar(430, 400, 196, 6, lady.magicPower / lady.maxMagicPower, '#a060d0');
+      spells.forEach((sp, i) => {
+        const d = E.SPELL_DEFINITIONS[sp], cost = Math.max(0, d.powerCost - discount), x = 14 + i * 300, sel = i === ui.spell, can = lady.magicPower >= cost && !ui.done && !ui.intro;
+        if (!ui.intro && !ui.done) zone(x, 402, 290, 44, () => { ui.spell = i; press('Enter'); });   // a tap on a spell casts it
+        box(x, 402, 290, 44, sel ? 'rgba(212,175,55,0.3)' : 'rgba(255,255,255,0.06)', sel ? GOLD : '#4a3a20');
+        txt(d.name + '  (' + cost + ')', x + 8, 421, 15, can ? PALE : DIM, 'left', true);
+        txt(fit(d.description + (d.targetsSelf ? '' : ' - ' + enemyK.name), 274, 12), x + 8, 438, 12, can ? '#cbb98a' : DIM);
+      });
+    }
+    if (ui.msg) txt(ui.msg, 626, 466, 12, '#ff7a5c', 'right');
+    if (lines.length) txt(fit(lines[lines.length - 1], 440, 12), 14, 466, 12, '#a0c0ff');
+  } else {
+    txt(ui.intro ? 'The herald calls the knights' : ui.done ? '' : 'The knights charge', 14, 396, 14, PALE, 'left', true);
+    lines.slice(-2).forEach((l, i) => txt(fit(l, 620, 13), 14, 418 + i * 20, 13, '#a0c0ff'));
+  }
+
+  if (ui.intro) {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 100, W, 200);
+    txt('Round ' + T.state.round, W / 2, 142, 18, DIM, 'center', true);
+    txt(k1.name, W / 2, 190, 28, GOLD, 'center', true);
+    txt('against', W / 2, 220, 15, DIM, 'center');
+    txt(k2.name, W / 2, 262, 28, GOLD, 'center', true);
+  }
+  if (ui.done && now - ui.doneAt > 1200) {
+    const r = ui.rec;
+    box(110, 120, 420, 150, PANEL, GOLD);
+    txt(r.winnerName + ' wins!', W / 2, 168, 26, GOLD, 'center', true);
+    txt(r.loserName + ' falls', W / 2, 196, 15, PALE, 'center');
+    if (r.mineDelta !== null) txt('You ' + (r.mineDelta >= 0 ? 'gain ' : 'lose ') + Math.abs(r.mineDelta) + (Math.abs(r.mineDelta) === 1 ? ' point' : ' points'), W / 2, 232, 17, r.mineDelta >= 0 ? '#7be07b' : '#ff7a5c', 'center', true);
+    txt('A: continue', W / 2, 258, 13, DIM, 'center');
+  }
+  txt(T.me.role === 'lady' ? 'Left/Right spell   Up/Down knight   A cast' : 'A: skip to the result', 626, 474, 11, DIM, 'right');
+}
+function boutKey(k) {
+  if (ui.intro) { if (k === 'Enter') { ui.intro = false; ui.nextAt = performance.now() + E.TICK_MS; } return; }
+  if (ui.done) { if (k === 'Enter' && performance.now() - ui.doneAt > 400) { ui.b = null; runRound(); } return; }
+  if (T.me.role === 'lady') {
+    const mine = myFighters(), lady = T.meL, spells = E.ACCESSORY_STATS[lady.outfit.accessory].spells;
+    if (k === 'ArrowLeft' || k === 'ArrowRight') ui.spell = (ui.spell + 1) % spells.length;
+    else if (k === 'ArrowUp' || k === 'ArrowDown') ui.target++;
+    else if (k === 'Enter' && mine.length) {
+      const b = ui.b, own = mine[ui.target % mine.length], sp = spells[ui.spell], d = E.SPELL_DEFINITIONS[sp];
+      const targetId = d.targetsSelf ? own : (own === b.k1.id ? b.k2.id : b.k1.id);
+      const r = T.castSpell(b, sp, targetId);
+      if (!r.ok) ui.msg = r.reason;
+    }
+  } else if (k === 'Enter') boutFinish();
+}
+
+// ---------------------------------------------------------------------------------------------------
+// standings and the end
+function drawTable(list, mineId, y0, nameOf) {
+  list.forEach((p, i) => {
+    const y = y0 + i * 32, mine = p.id === mineId;
+    box(10, y, 400, 29, mine ? 'rgba(212,175,55,0.3)' : 'rgba(0,0,0,0.5)', mine ? GOLD : '#4a3a20');
+    txt(String(i + 1), 24, y + 20, 15, GOLD, 'center', true);
+    img(avatarOf(p), 36, y + 1, 27, 27);
+    txt(fit(p.name, 170, 15, true), 72, y + 20, 15, PALE, 'left', true);
+    txt(p.title, 250, y + 20, 12, DIM);
+    txt(String(Math.round(p.points)), 400, y + 20, 16, '#fff', 'right', true);
+  });
+}
+function drawStandings(final) {
+  backdrop('bg_menu.jpg', 0.72);
+  box(0, 0, W, 34, 'rgba(0,0,0,0.75)');
+  const knights = ui.tab === 0;
+  txt(final ? 'Final standings' : 'After round ' + T.state.round + ' of ' + T.state.totalRounds, 12, 23, 16, GOLD, 'left', true);
+  txt((knights ? 'Knights' : 'Ladies') + '  (Left/Right)', W - 12, 23, 14, PALE, 'right');
+  zone(W - 200, 0, 200, 34, () => press('ArrowRight'));   // a tap on it shows the other table
+  drawTable(knights ? T.knightsRanked() : T.ladiesRanked(), T.me.id, 42, p => p.name);
+  box(420, 42, 212, 340, PANEL, '#4a3a20');
+  txt('This round', 432, 66, 14, GOLD, 'left', true);
+  T.log.forEach((r, i) => {
+    const y = 90 + i * 52, mine = r.mineDelta !== null;
+    txt(fit(r.winnerName, 190, 13, true), 432, y, 13, mine ? '#fff' : PALE, 'left', true);
+    txt('beat ' + fit(r.loserName, 150, 12), 432, y + 17, 12, DIM);
+    if (mine) txt((r.mineDelta >= 0 ? '+' : '') + r.mineDelta + ' for you', 432, y + 34, 12, r.mineDelta >= 0 ? '#7be07b' : '#ff7a5c');
+  });
+  if (final) {
+    const rank = (T.me.role === 'knight' ? T.knightsRanked() : T.ladiesRanked()).findIndex(p => p.id === T.me.id) + 1;
+    const champ = T.knightsRanked()[0], lc = T.ladiesRanked()[0];
+    box(10, 392, 400, 44, 'rgba(0,0,0,0.6)', GOLD);
+    txt('You finished number ' + rank + '.  Champions: ' + fit(champ.name, 110, 13) + ', ' + fit(lc.name, 110, 13), 18, 420, 13, PALE);
+  }
+  hint(final ? [['A: main menu', 'Enter']] : [['A: next round', 'Enter'], ['B: menu', 'Escape']]);
+}
+function standingsKey(k) {
+  if (k === 'ArrowLeft' || k === 'ArrowRight') ui.tab = 1 - ui.tab;
+  else if (k === 'Enter') {
+    T.endRound();
+    if (T.state.phase === 'finished') { ui = {screen: 'finished', tab: 0}; saved = null; }
+    else startPrepare();
+  } else if (k === 'Escape') {
+    openMenu('Menu', [
+      {label: 'Resume', fn: () => { menu = null; }},
+      {label: 'Main menu', fn: () => { saveNow(); saved = {T: T.save(), screen: 'standings'}; openTitle(); }},
+      {label: 'Exit', fn: () => { saveNow(); Platform.exit(); }},
+    ], () => { menu = null; });
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// input and the loop
+addEventListener('keydown', e => {
+  const k = e.key;
+  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', ' ', 'Tab'].includes(k)) return;
+  e.preventDefault();
+  press(k);
+});
+function press(k) {   // a button, or a tap that stands for one
+  if (menu) {
+    if (k === 'ArrowUp') menu.sel = (menu.sel + menu.items.length - 1) % menu.items.length;
+    else if (k === 'ArrowDown') menu.sel = (menu.sel + 1) % menu.items.length;
+    else if (k === 'Enter') menu.items[menu.sel].fn();
+    else if (k === 'Escape' && menu.back) menu.back();
+    return;
+  }
+  switch (ui.screen) {
+    case 'how': if (k === 'Escape' || k === 'Enter') openTitle(); break;
+    case 'how2': if (k === 'Escape' || k === 'Enter') ui = {screen: 'prepare', row: 0}; break;
+    case 'avatar':
+      if (k === 'ArrowLeft') ui.sel = (ui.sel + 7) % 8;
+      else if (k === 'ArrowRight') ui.sel = (ui.sel + 1) % 8;
+      else if (k === 'ArrowUp' || k === 'ArrowDown') ui.sel = (ui.sel + 4) % 8;
+      else if (k === 'Enter') { T = E.Tournament.create(ui.role, ui.sel + 1, 'You'); startPrepare(); }
+      else if (k === 'Escape') { ui = {screen: 'role'}; openRole(); }
+      break;
+    case 'prepare': prepareKey(k); break;
+    case 'pick': pickKey(k); break;
+    case 'bout': boutKey(k); break;
+    case 'standings': standingsKey(k); break;
+    case 'finished': if (k === 'Enter') { T = null; openTitle(); } break;
+  }
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (window.GameExt && GameExt.away()) return;   // the game is on the big screen: the splash is up, nothing runs here
+  ctx.clearRect(0, 0, W, H);
+  zones = [];
+  switch (ui.screen) {
+    case 'title': backdrop('bg_menu.jpg', 0.35); img('emblem.png', W / 2 - 48, 24, 96, 96); break;
+    case 'role': backdrop('bg_menu.jpg', 0.45); break;
+    case 'avatar': drawAvatar(); break;
+    case 'how': drawHow(); break;
+    case 'how2': drawHow(); break;
+    case 'prepare': drawPrepare(); break;
+    case 'pick': drawPick(); break;
+    case 'bout': boutUpdate(now); drawBout(now); break;
+    case 'standings': drawStandings(false); break;
+    case 'finished': drawStandings(true); break;
+  }
+  if (menu) drawMenu();
+}
+
+// ---------------------------------------------------------------------------------------------------
+// state: the app comes back to the same place (a bout that was running starts again)
+function baseScreen() {
+  if (!T) return null;
+  if (T.state.phase === 'finished' || ui.screen === 'finished') return 'finished';
+  if (ui.screen === 'standings' && !T.nextPair()) return 'standings';
+  return 'prepare';
+}
+function snapshot() {
+  if (T && ui.screen === 'bout' && ui.b && !ui.done) T.abandonBout(ui.b);
+  const s = baseScreen();
+  if (!T || s === 'finished') return {T: null};
+  return {T: T.save(), screen: s};
+}
+function saveNow() { Platform.state.set(snapshot()); }
+function resume() {
+  menu = null;
+  T = E.Tournament.restore(saved.T);
+  if (saved.screen === 'standings') ui = {screen: 'standings', tab: T.me.role === 'knight' ? 0 : 1};
+  else startPrepare();
+}
+function restore(s) {
+  if (s && s.T && s.T.state && s.T.me) {
+    saved = s;
+    try { resume(); return; } catch (e) { saved = null; T = null; }
+  }
+  openTitle();
+}
+
+const firstState = Platform.state.get().then(restore).catch(openTitle);
+
+openTitle();
+requestAnimationFrame(frame);
+// with an external screen the game is on it (the console shows the splash); the same page serves both screens (docs/system-api.md)
+GameExt.init({id: 'knights', title: 'Knights & Ladies', splash: 'assets/splash.webp', text: 'Playing on the big screen', snapshot, restore, save: saveNow, ready: firstState});
+</script>

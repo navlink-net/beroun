@@ -1,0 +1,575 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Pirates</title>
+<meta name="viewport" content="width=640,height=480">
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #061828; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; height: 100%; width: auto; max-width: 100%; aspect-ratio: 4 / 3; }   /* 4:3 on any screen: the console as it is, the big screen with bars at the sides */
+</style>
+<canvas id="c" width="640" height="480"></canvas>
+<script src="/platform.js"></script>
+<script src="/gameext.js"></script>
+<script>
+// Pirates, single player: you against three AI captains, no server. Collect all four fragments of one
+// treasure map (copy A or copy B) and sail to the treasure island before anybody else does.
+// Buttons: D-pad (or the left stick) steers, Up sails, X boards, Y trades, A confirms, B opens the menu.
+
+const W = 640, H = 480;
+const ZOOM = 0.6;                                  // the world is drawn at 60 % so the screen shows enough sea
+const WORLD = {w: 3200, h: 2200};
+const SHIP_SPEED = 130, TURN = 2.0, BOARD_RANGE = 90, SHIP_DIAM = 70, BOARD_COOLDOWN = 3;
+const NAMES = ['You', 'Black Pearl', 'Iron Hook', 'Red Corsair'];
+const COLORS = ['#e05c3a', '#3a8fe0', '#3ab87a', '#e0c33a'];
+const START_POS = [{x: 280, y: 280}, {x: 2920, y: 280}, {x: 280, y: 1920}, {x: 2920, y: 1920}];
+// x, y, rx, ry (picture), cr (collision radius)
+const ISLANDS = [
+  {x: 1600, y: 1100, rx: 130, ry: 100, cr: 220, isTreasure: true},
+  {x: 650,  y: 550,  rx: 80,  ry: 60,  cr: 150},
+  {x: 2550, y: 550,  rx: 70,  ry: 55,  cr: 140},
+  {x: 650,  y: 1650, rx: 90,  ry: 70,  cr: 155},
+  {x: 2550, y: 1650, rx: 75,  ry: 60,  cr: 145},
+  {x: 1600, y: 380,  rx: 60,  ry: 45,  cr: 130},
+  {x: 1600, y: 1820, rx: 65,  ry: 50,  cr: 135},
+  {x: 950,  y: 1100, rx: 55,  ry: 45,  cr: 125},
+  {x: 2250, y: 1100, rx: 60,  ry: 48,  cr: 130},
+];
+const TREASURE = ISLANDS[0];
+const COPY_COLOR = ['#f0c040', '#70c8f0'];         // copy A gold, copy B blue
+const fragCopy = f => (f < 4 ? 0 : 1);
+
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+// outside the console (a plain browser) there is no Platform: a stand-in keeps the page working
+if (!window.Platform) window.Platform = {state: {get: () => Promise.resolve(null), set: () => Promise.resolve()}, onClose() {}, exit() {}};
+
+function img(src) { const i = new Image(); i.src = src; return i; }
+const shipImgs = [0, 1, 2, 3].map(i => img('assets/ship_' + i + '.png'));
+const islandImg = img('assets/island.png'), treasureImg = img('assets/island_treasure.png'), seaImg = img('assets/sea_tile.png');
+const ready = i => i.complete && i.naturalWidth;
+
+// ---------------------------------------------------------------------------------------------------
+// game state
+let G = null;                                      // {players, ships, candidate, time}
+let mode = 'title';                                // title | how | play | pause | trade | end
+let menu = null;                                   // {title, items: [{label, fn}], sel, back}
+let trade = null;                                  // {target, row, offer, want}
+let result = null;                                 // text of the end screen
+let saved = null;                                  // a saved game, when there is one
+let banners = [];                                  // [{text, color, until}]
+let boardCool = 0;
+const aiCool = {}, aiContact = {};
+let aiTimer = 0;
+
+const now = () => performance.now() / 1000;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const angDiff = (a, b) => { let d = b - a; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+
+function newGame() {
+  const A = shuffle([0, 1, 2, 3]), B = shuffle([4, 5, 6, 7]);
+  G = {
+    players: NAMES.map((name, i) => ({slot: i, name, isAI: i > 0, color: COLORS[i], fragments: [A[i], B[i]]})),
+    ships: START_POS.map((p, i) => ({slot: i, x: p.x, y: p.y, h: Math.atan2(1100 - p.y, 1600 - p.x), speed: 0, tx: null, ty: null, kx: 0, ky: 0})),
+    candidate: null,
+    time: 0,
+  };
+  banners = []; boardCool = 0; aiTimer = 0;
+  for (const k of Object.keys(aiCool)) delete aiCool[k];
+  for (const k of Object.keys(aiContact)) delete aiContact[k];
+  result = null; trade = null;
+  mode = 'play';
+  say('Collect four fragments of one map and sail to the treasure island', '#f0d080');
+}
+
+function say(text, color) { banners.push({text, color: color || '#fff', until: now() + 3.2}); if (banners.length > 3) banners.shift(); }
+
+// ---------------------------------------------------------------------------------------------------
+// rules (the same as the multiplayer server)
+function hasFullCopy(frags) {
+  if ([0, 1, 2, 3].every(f => frags.includes(f))) return 0;
+  if ([4, 5, 6, 7].every(f => frags.includes(f))) return 1;
+  return null;
+}
+
+function checkVictory() {
+  for (const p of G.players) {
+    const c = hasFullCopy(p.fragments);
+    if (c === null) continue;
+    if (G.candidate !== p.slot) {
+      G.candidate = p.slot;
+      if (p.slot === 0) say('You hold a complete map! Sail to the treasure island!', '#ffe066');
+      else say(p.name + ' holds a complete map! Stop them!', '#ff7a5c');
+    }
+    return;
+  }
+  G.candidate = null;
+}
+
+function resolveBoarding(aSlot, dSlot) {
+  const att = G.players[aSlot], def = G.players[dSlot];
+  if (!def.fragments.length) return;
+  const bonus = p => Math.min(3, Math.floor(p.fragments.length / 2));
+  const rA = Math.ceil(Math.random() * 6) + bonus(att), rD = Math.ceil(Math.random() * 6) + bonus(def);
+  const attWon = rA > rD;                          // a tie goes to the defender
+  const winner = attWon ? att : def, loser = attWon ? def : att;
+  let took = null;
+  if (loser.fragments.length) {
+    took = loser.fragments.splice(Math.floor(Math.random() * loser.fragments.length), 1)[0];
+    winner.fragments.push(took);
+  }
+  const rolls = ' (' + rA + ' vs ' + rD + ')';
+  if (aSlot === 0) say(attWon ? 'You won the boarding' + rolls + ' and took fragment #' + (took + 1) : 'You lost the boarding' + rolls + (took !== null ? ': ' + def.name + ' took fragment #' + (took + 1) : ''), attWon ? '#7be07b' : '#ff7a5c');
+  else if (dSlot === 0) say(attWon ? att.name + ' boarded you' + rolls + ' and took fragment #' + (took + 1) : 'You repelled ' + att.name + rolls + ' and took fragment #' + (took + 1), attWon ? '#ff7a5c' : '#7be07b');
+  checkVictory();
+
+  // push the two ships apart
+  const sa = G.ships[aSlot], sd = G.ships[dSlot];
+  let dx = sa.x - sd.x || 1, dy = sa.y - sd.y || 1; const len = Math.hypot(dx, dy) || 1;
+  dx /= len; dy /= len;
+  sa.kx = dx * 220; sa.ky = dy * 220; sd.kx = -dx * 220; sd.ky = -dy * 220;
+  for (const s of [sa, sd]) if (G.players[s.slot].isAI) { s.tx = null; s.ty = null; }
+}
+
+function resolveTrade(pSlot, tSlot, offer, want) {
+  const p = G.players[pSlot], t = G.players[tSlot];
+  p.fragments.splice(p.fragments.indexOf(offer), 1); t.fragments.splice(t.fragments.indexOf(want), 1);
+  p.fragments.push(want); t.fragments.push(offer);
+  checkVictory();
+}
+
+// ---------------------------------------------------------------------------------------------------
+// AI captains
+function updateAI() {
+  const t = G.time;                                // game time: it stands still while paused
+  for (const ship of G.ships) {
+    const pl = G.players[ship.slot];
+    if (!pl.isAI) continue;
+    if (t - (aiCool[ship.slot] || -99) < 20) {     // after an attack: wander for 20 s
+      ship.tx = rnd(400, WORLD.w - 400); ship.ty = rnd(400, WORLD.h - 400);
+      continue;
+    }
+    if (hasFullCopy(pl.fragments) !== null) { ship.tx = TREASURE.x; ship.ty = TREASURE.y; continue; }
+    let best = null, bestN = 0;
+    for (const o of G.players) if (o.slot !== pl.slot && o.fragments.length > bestN) { bestN = o.fragments.length; best = o.slot; }
+    if (best !== null) {
+      const s = G.ships[best];
+      ship.tx = s.x + rnd(-30, 30); ship.ty = s.y + rnd(-30, 30);
+    } else { ship.tx = rnd(400, WORLD.w - 400); ship.ty = rnd(400, WORLD.h - 400); }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// input
+const keys = {};
+let stick = {x: 0, y: 0};
+function pollStick() {
+  stick = {x: 0, y: 0};
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const g of pads) {
+    if (!g || g.axes.length < 2) continue;
+    const x = g.axes[0], y = g.axes[1];
+    if (Math.hypot(x, y) > 0.3) { stick = {x, y}; return; }
+  }
+}
+
+addEventListener('keydown', e => {
+  const k = e.key;
+  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', ' ', 'Tab'].includes(k)) return;
+  e.preventDefault();
+  if (e.repeat && mode !== 'trade' && !menu) return;
+  keys[k] = true;
+  press(k);
+});
+addEventListener('keyup', e => { keys[e.key] = false; });
+addEventListener('blur', () => { for (const k of Object.keys(keys)) keys[k] = false; });
+
+function press(k) {
+  if (menu) {
+    if (k === 'ArrowUp') menu.sel = (menu.sel + menu.items.length - 1) % menu.items.length;
+    else if (k === 'ArrowDown') menu.sel = (menu.sel + 1) % menu.items.length;
+    else if (k === 'Enter') menu.items[menu.sel].fn();
+    else if (k === 'Escape' && menu.back) menu.back();
+    return;
+  }
+  if (mode === 'how') { if (k === 'Escape' || k === 'Enter') openTitle(); return; }
+  if (mode === 'trade') return tradeKey(k);
+  if (mode !== 'play') return;
+  if (k === 'Escape') openPause();
+  else if (k === ' ') doBoard();
+  else if (k === 'Tab') doTrade();
+}
+
+function nearest() {
+  const me = G.ships[0]; let best = null, bd = BOARD_RANGE * 1.2;
+  for (const s of G.ships) {
+    if (s.slot === 0) continue;
+    const d = dist(me, s);
+    if (d < bd) { bd = d; best = s.slot; }
+  }
+  return best;
+}
+
+function doBoard() {
+  const t = nearest();
+  if (t === null) return say('No ship in reach', '#ccc');
+  if (boardCool > 0) return say('Your crew is catching its breath', '#ccc');
+  if (!G.players[t].fragments.length) return say(G.players[t].name + ' has nothing to take', '#ccc');
+  boardCool = BOARD_COOLDOWN;
+  resolveBoarding(0, t);
+}
+
+function doTrade() {
+  const t = nearest();
+  if (t === null) return say('No ship in reach', '#ccc');
+  if (!G.players[0].fragments.length || !G.players[t].fragments.length) return say('Nothing to trade', '#ccc');
+  trade = {target: t, row: 0, offer: 0, want: 0};
+  mode = 'trade';
+}
+
+function tradeKey(k) {
+  const me = G.players[0], them = G.players[trade.target];
+  if (k === 'Escape') { trade = null; mode = 'play'; return; }
+  if (k === 'ArrowUp' || k === 'ArrowDown') trade.row = 1 - trade.row;
+  else if (k === 'ArrowLeft' || k === 'ArrowRight') {
+    const d = k === 'ArrowLeft' ? -1 : 1;
+    if (trade.row === 0) trade.offer = (trade.offer + d + me.fragments.length) % me.fragments.length;
+    else trade.want = (trade.want + d + them.fragments.length) % them.fragments.length;
+  } else if (k === 'Enter') {
+    const offer = me.fragments[trade.offer], want = them.fragments[trade.want], t = trade.target;
+    trade = null; mode = 'play';
+    if (Math.random() < 0.5) { resolveTrade(0, t, offer, want); say(them.name + ' accepts: #' + (offer + 1) + ' for #' + (want + 1), '#7be07b'); }
+    else say(them.name + ' declines the trade', '#ff7a5c');
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// menus
+function openMenu(title, items, back) { menu = {title, items, sel: 0, back}; }
+function openTitle() {
+  mode = 'title';
+  const items = [];
+  if (saved) items.push({label: 'Continue', fn: () => { G = saved.G; banners = []; menu = null; mode = 'play'; }});
+  items.push({label: 'New voyage', fn: () => { menu = null; newGame(); }});
+  items.push({label: 'How to play', fn: () => { menu = null; mode = 'how'; }});
+  items.push({label: 'Exit', fn: () => Platform.exit()});
+  openMenu('PIRATES', items, () => Platform.exit());
+}
+function openPause() {
+  mode = 'pause';
+  openMenu('Paused', [
+    {label: 'Resume', fn: () => { menu = null; mode = 'play'; }},
+    {label: 'New voyage', fn: () => { menu = null; newGame(); }},
+    {label: 'Exit', fn: () => { saveNow(); Platform.exit(); }},
+  ], () => { menu = null; mode = 'play'; });
+}
+function openEnd(text) {
+  mode = 'end'; result = text; G.over = true;
+  openMenu(text, [
+    {label: 'New voyage', fn: () => { menu = null; newGame(); }},
+    {label: 'Exit', fn: () => Platform.exit()},
+  ], () => Platform.exit());
+}
+
+// ---------------------------------------------------------------------------------------------------
+// simulation
+function moveShip(s, dt) {
+  s.x += s.kx * dt; s.y += s.ky * dt;
+  const decay = Math.exp(-2.5 * dt); s.kx *= decay; s.ky *= decay;
+  s.x += Math.cos(s.h) * s.speed * dt; s.y += Math.sin(s.h) * s.speed * dt;
+  // islands: stay outside the collision circle and slide along it
+  for (const isl of ISLANDS) {
+    const dx = s.x - isl.x, dy = s.y - isl.y, d = Math.hypot(dx, dy);
+    if (d >= isl.cr) continue;
+    const nx = dx / (d || 1), ny = dy / (d || 1);
+    s.x = isl.x + nx * isl.cr; s.y = isl.y + ny * isl.cr;
+    // slide along the circle, to the side the ship is already heading
+    const tx = -ny, ty = nx, dir = Math.cos(s.h) * tx + Math.sin(s.h) * ty >= 0 ? 1 : -1;
+    s.x += tx * dir * s.speed * dt * 0.6; s.y += ty * dir * s.speed * dt * 0.6;
+  }
+  s.x = Math.max(40, Math.min(WORLD.w - 40, s.x)); s.y = Math.max(40, Math.min(WORLD.h - 40, s.y));
+}
+
+function update(dt) {
+  G.time += dt;
+  boardCool = Math.max(0, boardCool - dt);
+  pollStick();
+
+  // your ship
+  const me = G.ships[0];
+  let turn = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0), throttle = keys.ArrowUp ? 1 : (keys.ArrowDown ? -1 : 0);
+  if (stick.x || stick.y) {
+    const want = Math.atan2(stick.y, stick.x), d = angDiff(me.h, want);
+    turn = Math.max(-1, Math.min(1, d * 2)); throttle = Math.min(1, Math.hypot(stick.x, stick.y));
+  }
+  me.h += turn * TURN * dt;
+  const target = throttle > 0 ? SHIP_SPEED * throttle : 0;
+  if (throttle < 0) me.speed = Math.max(0, me.speed - 400 * dt);   // Down brakes hard
+  else me.speed += Math.sign(target - me.speed) * Math.min(Math.abs(target - me.speed), (target > me.speed ? 160 : 90) * dt);
+  moveShip(me, dt);
+
+  // AI ships
+  aiTimer += dt;
+  if (aiTimer >= 3) { aiTimer = 0; updateAI(); }
+  for (const s of G.ships) {
+    if (s.slot === 0) continue;
+    if (s.tx !== null) {
+      const dx = s.tx - s.x, dy = s.ty - s.y, d = Math.hypot(dx, dy);
+      if (d < 8) { s.tx = null; s.ty = null; s.speed = 0; }
+      else {
+        const diff = angDiff(s.h, Math.atan2(dy, dx));
+        s.h += Math.max(-1, Math.min(1, diff * 3)) * 2.5 * dt;
+        const full = Math.abs(diff) < 1.2 ? SHIP_SPEED : SHIP_SPEED * 0.3;
+        s.speed += Math.sign(full - s.speed) * Math.min(Math.abs(full - s.speed), 200 * dt);
+      }
+    } else s.speed = Math.max(0, s.speed - 200 * dt);
+    moveShip(s, dt);
+  }
+
+  // ships bump into each other; ships in reach of each other
+  const near = [];
+  for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) {
+    const a = G.ships[i], b = G.ships[j], d = dist(a, b);
+    if (d < BOARD_RANGE) near.push([i, j]);
+    if (d < SHIP_DIAM && d > 0.1) {
+      const push = (SHIP_DIAM - d) / 2, nx = (a.x - b.x) / d * push, ny = (a.y - b.y) / d * push;
+      a.x += nx; a.y += ny; b.x -= nx; b.y -= ny;
+      for (const s of [a, b]) if (G.players[s.slot].isAI) { s.tx = null; s.ty = null; }
+    }
+  }
+  const t = G.time, active = new Set(near.map(([a, b]) => a + '-' + b));
+  for (const k of Object.keys(aiContact)) if (!active.has(k)) delete aiContact[k];
+  for (const [i, j] of near) {
+    const k = i + '-' + j;
+    if (!aiContact[k]) aiContact[k] = t;
+    if (t - aiContact[k] <= 8) continue;           // 8 s grace period on first contact
+    for (const [att, def] of [[i, j], [j, i]]) {
+      if (G.players[att].isAI && G.players[def].fragments.length && t - (aiCool[att] || -99) > 5) {
+        aiCool[att] = t; resolveBoarding(att, def); break;
+      }
+    }
+  }
+
+  // somebody with a complete map reaches the treasure island
+  if (G.candidate !== null) {
+    const w = G.ships[G.candidate];
+    if (dist(w, TREASURE) < TREASURE.cr + 20) {
+      openEnd(G.candidate === 0 ? 'Victory! You found the treasure' : G.players[G.candidate].name + ' found the treasure');
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// drawing
+const cam = {x: 0, y: 0};
+function updateCamera() {
+  const me = G.ships[0];
+  cam.x = Math.max(0, Math.min(WORLD.w - W / ZOOM, me.x - W / ZOOM / 2));
+  cam.y = Math.max(0, Math.min(WORLD.h - H / ZOOM, me.y - H / ZOOM / 2));
+}
+const sx = x => (x - cam.x) * ZOOM, sy = y => (y - cam.y) * ZOOM;
+
+function drawSea() {
+  if (ready(seaImg)) {
+    ctx.save();
+    ctx.scale(ZOOM, ZOOM); ctx.translate(-cam.x, -cam.y);
+    ctx.fillStyle = ctx.createPattern(seaImg, 'repeat');
+    ctx.fillRect(cam.x, cam.y, W / ZOOM, H / ZOOM);
+    ctx.restore();
+  } else { ctx.fillStyle = '#061828'; ctx.fillRect(0, 0, W, H); }
+  ctx.strokeStyle = 'rgba(201,168,76,0.25)'; ctx.lineWidth = 3;
+  ctx.strokeRect(sx(0), sy(0), WORLD.w * ZOOM, WORLD.h * ZOOM);
+}
+
+function drawIsland(isl) {
+  const x = sx(isl.x), y = sy(isl.y);
+  const size = (isl.rx + isl.ry) * (isl.isTreasure ? 1.1 : 1.3) * ZOOM;
+  if (x < -size || x > W + size || y < -size || y > H + size) return;
+  if (isl.isTreasure) {
+    const r = (isl.rx + 50) * ZOOM, g = ctx.createRadialGradient(x, y, r * 0.3, x, y, r);
+    g.addColorStop(0, 'rgba(201,168,76,0.3)'); g.addColorStop(1, 'rgba(201,168,76,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  const im = isl.isTreasure ? treasureImg : islandImg;
+  if (ready(im)) ctx.drawImage(im, x - size, y - size, size * 2, size * 2);
+  else { ctx.fillStyle = '#2a5c2a'; ctx.beginPath(); ctx.ellipse(x, y, isl.rx * ZOOM, isl.ry * ZOOM, 0, 0, Math.PI * 2); ctx.fill(); }
+  if (isl.isTreasure) label('TREASURE', x, y + isl.ry * ZOOM + 22, 14, '#f0d080');
+}
+
+function label(text, x, y, size, color, align) {
+  ctx.font = 'bold ' + size + 'px "DejaVu Sans", sans-serif';
+  ctx.textAlign = align || 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.85)'; ctx.strokeText(text, x, y);
+  ctx.fillStyle = color; ctx.fillText(text, x, y);
+}
+
+function diamonds(x, y, frags, size, gap, dim) {
+  for (let id = 0; id < 8; id++) {
+    ctx.save(); ctx.translate(x + id * gap + (id >= 4 ? 4 : 0), y); ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = frags.includes(id) ? COPY_COLOR[fragCopy(id)] : (dim || 'rgba(255,255,255,0.15)');
+    ctx.fillRect(-size / 2, -size / 2, size, size);
+    ctx.restore();
+  }
+}
+
+function drawShip(s) {
+  const pl = G.players[s.slot], x = sx(s.x), y = sy(s.y);
+  if (x < -60 || x > W + 60 || y < -60 || y > H + 60) return;
+  const cA = pl.fragments.filter(f => f < 4).length, cB = pl.fragments.length - cA, best = Math.max(cA, cB);
+  const size = 90 * ZOOM * 1.1;
+  ctx.save(); ctx.translate(x, y);
+  if (best >= 3) { ctx.shadowColor = COPY_COLOR[cA >= cB ? 0 : 1]; ctx.shadowBlur = 14; }
+  ctx.rotate(s.h + Math.PI / 2);
+  if (ready(shipImgs[s.slot])) ctx.drawImage(shipImgs[s.slot], -size / 2, -size / 2, size, size);
+  else { ctx.fillStyle = pl.color; ctx.beginPath(); ctx.ellipse(0, 0, 8, 20, 0, 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore();
+  if (s.slot === 0) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+    ctx.beginPath(); ctx.arc(x, y, size / 2 + 3, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+  }
+  label(pl.name, x, y - size / 2 - 4, 13, s.slot === 0 ? '#f5dc80' : '#e8d5a3');
+}
+
+function drawHud() {
+  ctx.fillStyle = 'rgba(4,12,28,0.78)'; ctx.fillRect(0, 0, W, 46);
+  G.players.forEach((p, i) => {
+    const x = i * 160 + 8;
+    if (i === 0) { ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(i * 160 + 2, 2, 156, 42); }
+    ctx.fillStyle = p.color; ctx.fillRect(x, 8, 8, 8);
+    label(p.name, x + 14, 17, 12, i === 0 ? '#f5dc80' : '#e8d5a3', 'left');
+    diamonds(x + 6, 32, p.fragments, 7, 14);
+  });
+  // minimap
+  const mw = 120, mh = Math.round(120 * WORLD.h / WORLD.w), mx = W - mw - 8, my = H - mh - 8;
+  ctx.fillStyle = 'rgba(4,12,28,0.82)'; ctx.fillRect(mx, my, mw, mh);
+  ctx.strokeStyle = 'rgba(201,168,76,0.5)'; ctx.lineWidth = 1; ctx.strokeRect(mx + 0.5, my + 0.5, mw, mh);
+  const k = mw / WORLD.w;
+  for (const isl of ISLANDS) { ctx.fillStyle = isl.isTreasure ? '#f0d080' : '#3a6a3a'; ctx.beginPath(); ctx.arc(mx + isl.x * k, my + isl.y * k, isl.isTreasure ? 4 : 2.5, 0, Math.PI * 2); ctx.fill(); }
+  for (const s of G.ships) { ctx.fillStyle = G.players[s.slot].color; ctx.beginPath(); ctx.arc(mx + s.x * k, my + s.y * k, s.slot === 0 ? 3.5 : 2.5, 0, Math.PI * 2); ctx.fill(); if (s.slot === 0) { ctx.strokeStyle = '#fff'; ctx.stroke(); } }
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.strokeRect(mx + cam.x * k, my + cam.y * k, W / ZOOM * k, H / ZOOM * k);
+
+  // pointer to the treasure island when you hold a complete map
+  if (G.candidate === 0) {
+    const me = G.ships[0], a = Math.atan2(TREASURE.y - me.y, TREASURE.x - me.x), d = dist(me, TREASURE);
+    if (d * ZOOM > 150) {
+      const px = W / 2 + Math.cos(a) * 170, py = H / 2 + Math.sin(a) * 140;
+      ctx.save(); ctx.translate(px, py); ctx.rotate(a);
+      ctx.fillStyle = '#ffe066'; ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-8, -9); ctx.lineTo(-8, 9); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // what X and Y do now
+  const t = nearest();
+  if (t !== null) {
+    const them = G.players[t];
+    label('X  Board ' + them.name + (boardCool > 0 ? ' (' + boardCool.toFixed(1) + ')' : ''), 16, H - 36, 14, boardCool > 0 ? '#999' : '#fff', 'left');
+    label('Y  Trade', 16, H - 14, 14, '#fff', 'left');
+  }
+
+  // messages
+  const tnow = now();
+  banners = banners.filter(b => b.until > tnow);
+  banners.forEach((b, i) => label(b.text, W / 2, 74 + i * 22, 14, b.color));
+}
+
+function panel(w, h) {
+  const x = (W - w) / 2, y = (H - h) / 2;
+  ctx.fillStyle = 'rgba(6,16,36,0.92)'; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#c9a84c'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+  return {x, y};
+}
+
+function drawMenu() {
+  const rows = menu.items.length, h = 76 + rows * 40, w = 420;
+  const {x, y} = panel(w, h);
+  label(menu.title, W / 2, y + 44, menu.title.length > 22 ? 18 : 28, '#f0d080');
+  menu.items.forEach((it, i) => {
+    const iy = y + 66 + i * 40;
+    if (i === menu.sel) { ctx.fillStyle = '#c9a84c'; ctx.fillRect(x + 30, iy, w - 60, 32); }
+    ctx.font = 'bold 18px "DejaVu Sans", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = i === menu.sel ? '#1a1208' : '#e8d5a3'; ctx.fillText(it.label, W / 2, iy + 17);
+  });
+}
+
+function drawHow() {
+  const {x, y} = panel(560, 400);
+  label('How to play', W / 2, y + 40, 24, '#f0d080');
+  const lines = [
+    ['Goal', 'Gather the 4 fragments of map A (gold) or map B (blue),'],
+    ['', 'then sail to the treasure island before anybody else.'],
+    ['D-pad / stick', 'Left and Right turn, Up sails, Down brakes.'],
+    ['X', 'Board a ship in reach and take one of its fragments.'],
+    ['Y', 'Offer a trade: a fragment of yours for one of theirs.'],
+    ['A', 'Confirm.'],
+    ['B', 'Menu.'],
+    ['Boarding', 'Each side rolls a die and adds a bonus for its fragments;'],
+    ['', 'the winner takes one fragment. A tie goes to the defender.'],
+  ];
+  lines.forEach(([a, b], i) => {
+    const ly = y + 74 + i * 27;
+    if (a) label(a, x + 24, ly, 14, '#f0d080', 'left');
+    ctx.font = '14px "DejaVu Sans", sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#e8d5a3'; ctx.fillText(b, x + (a ? 150 : 150), ly);
+  });
+  label('A or B: back', W / 2, y + 380, 14, '#aaa');
+}
+
+function drawTrade() {
+  const me = G.players[0], them = G.players[trade.target];
+  const {x, y} = panel(520, 290);
+  label('Trade with ' + them.name, W / 2, y + 40, 22, '#f0d080');
+  const row = (title, frags, sel, on, ry) => {
+    label(title, x + 28, ry, 15, on ? '#fff' : '#aaa', 'left');
+    frags.forEach((f, i) => {
+      const cx = x + 140 + i * 56, cy = ry - 14;
+      ctx.fillStyle = i === sel ? COPY_COLOR[fragCopy(f)] : 'rgba(255,255,255,0.12)';
+      ctx.fillRect(cx, cy, 48, 32);
+      if (i === sel && on) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(cx, cy, 48, 32); }
+      ctx.font = 'bold 16px "DejaVu Sans", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = i === sel ? '#1a1208' : COPY_COLOR[fragCopy(f)]; ctx.fillText('#' + (f + 1), cx + 24, cy + 17);
+    });
+  };
+  row('You give', me.fragments, trade.offer, trade.row === 0, y + 110);
+  row('You get', them.fragments, trade.want, trade.row === 1, y + 180);
+  label('Left/Right choose   Up/Down switch row', W / 2, y + 234, 14, '#ccc');
+  label('A offer   B cancel   (the captain may refuse)', W / 2, y + 262, 14, '#ccc');
+}
+
+function frame() {
+  requestAnimationFrame(frame);
+  if (window.GameExt && GameExt.away()) { frame.last = 0; return; }   // the game is on the big screen: the splash is up, nothing runs here
+  const t = now(); const dt = Math.min(0.05, t - (frame.last || t)); frame.last = t;
+  if (mode === 'play') update(dt);
+  if (G) { updateCamera(); drawSea(); ISLANDS.forEach(drawIsland); [...G.ships].sort((a, b) => a.y - b.y).forEach(drawShip); drawHud(); }
+  else { cam.x = 1100; cam.y = 700; drawSea(); ISLANDS.forEach(drawIsland); }
+  if (mode === 'trade') drawTrade();
+  else if (mode === 'how') { ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H); drawHow(); }
+  else if (menu) { ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, 0, W, H); drawMenu(); }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// state: the app comes back to the same place (a game in progress comes back paused)
+function snapshot() {
+  const m = mode === 'play' || mode === 'trade' ? 'pause' : mode;
+  return {mode: m, G: G && !G.over ? G : null, result};
+}
+function saveNow() { Platform.state.set(snapshot()); }
+function restore(s) {
+  if (s && s.G && Array.isArray(s.G.players) && s.G.players.length === 4 && Array.isArray(s.G.ships)) {
+    saved = {G: s.G};
+    if (s.mode === 'pause') { G = s.G; openPause(); return; }
+  }
+  if (s && s.mode === 'end' && s.result) { G = null; openTitle(); return; }
+  openTitle();
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden && mode === 'play') openPause(); });
+
+const firstState = Platform.state.get().then(restore).catch(openTitle);
+
+openTitle();
+frame();
+// with an external screen the game is on it (the console shows the splash); the same page serves both screens (docs/system-api.md)
+GameExt.init({id: 'pirates', title: 'Pirates', splash: 'assets/splash.webp', text: 'Playing on the big screen', snapshot, restore, save: saveNow, ready: firstState});
+</script>

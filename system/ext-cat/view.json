@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "id": "ext-cat",
+  "name": "External screen (the cat)",
+  "version": "1.0.0",
+  "frontend": {"entry": "index.html", "window": "own"},
+  "tile": {"hidden": true},
+  "state": false
+}

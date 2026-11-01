@@ -1,0 +1,7 @@
+{"format": 1, "id": "nativehello", "name": "Native Hello", "version": "1.0.0", "beroun": "1.0", "icon": "icon.svg",
+ "frontend": {"entry": "index.html", "window": "own"},
+ "tile": {"hidden": true},
+ "binaries": {"hello": {"linux-x86_64": "bin/linux-x86_64/hello", "linux-arm64": "bin/linux-arm64/hello",
+                      "android-arm64": "bin/android-arm64/libhello.so", "android-x86_64": "bin/android-x86_64/libhello.so"}},
+ "services": [{"id": "nativehello", "host": "process", "cmd": ["{bin:hello}", "{port}"], "port": 49201, "start": "open", "memory_mb": 4}],
+ "endpoints": [{"path": "hello", "methods": ["GET"], "service": "nativehello", "access": ["page"]}]}

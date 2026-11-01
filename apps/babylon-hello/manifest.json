@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "id": "babylon-hello",
+  "name": "Babylon 3D",
+  "version": "0.1.0",
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "capabilities": [{"name": "WebGL", "scope": {"required": true}}],
+  "tile": {"hidden": true}
+}

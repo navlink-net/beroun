@@ -1,0 +1,32 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Ext B big (test)</title>
+<!-- The big page of the test app ext-b: a counter that runs (so that "the same place" can be seen), the keys and the mouse it hears, the messages it echoes. -->
+<script src="/platform.js"></script>
+<body style="margin:0;font:28px sans-serif;background:#134;color:#eee">
+<pre id="o"></pre>
+<script>
+let n = 0, launch = null, keys = [], moves = 0, wheel = 0, buttons = [], msgs = [], sus = [], evs = [], size = '';
+const o = document.getElementById('o');
+const show = () => {
+  size = innerWidth + 'x' + innerHeight;
+  o.textContent = 'big ext-b count=' + n + ' size=' + size + ' launch=' + JSON.stringify(launch) + ' keys=' + keys.join(',') + ' moves=' + moves + ' wheel=' + wheel +
+    ' buttons=' + buttons.join(',') + ' msgs=' + JSON.stringify(msgs) + ' suspended=' + sus.join(',') + ' events=' + evs.join(',');
+};
+Promise.all([Platform.display.launch(), Platform.state.get()]).then(([l, s]) => {
+  launch = l;
+  if (l.resume && s) n = s.n;     // under another app and back: the same place
+  show();
+});
+setInterval(() => { n++; show(); }, 200);
+Platform.onSuspend(reason => { sus.push(reason); return Platform.state.set({n}); });
+Platform.display.onMessage(m => { msgs.push(m); show(); Platform.display.send({pong: m.ping, from: 'ext-b', n}); });
+Platform.display.on(e => { evs.push(e.event); show(); });
+addEventListener('keydown', e => { keys.push(e.key); show(); });
+addEventListener('mousemove', () => { moves++; });
+addEventListener('wheel', () => { wheel++; });
+addEventListener('mousedown', e => { buttons.push(e.button); show(); });
+addEventListener('resize', show);
+show();
+</script>

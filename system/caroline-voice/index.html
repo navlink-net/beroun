@@ -1,0 +1,82 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=640,initial-scale=1">
+<title>Caroline (voice)</title>
+<script src="/platform.js"></script>
+<style>
+  /* nothing is drawn here: the window is transparent. Her face is another window (native/face/face_view.c) over the screen; this page only
+     runs her chat page, which listens, and hands the spoken answers on to the face */
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  iframe { position: absolute; left: 0; top: 0; width: 640px; height: 480px; border: 0; opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+<iframe id="f" allow="microphone; autoplay"></iframe>
+<script>
+// Caroline in the continuous voice dialogue: the R2 button shows her face over whatever is on the screen (ic-face-view, one process that
+// renders, plays the sound and draws, so the voice and the mouth stay together); R2 ends it. Input is only the voice. The dialogue itself is her
+// own page (chat.html in the hidden frame, a tab of its own: "voice"); the loop that presses her microphone button is in caroline-shim.js, which
+// shelld injects into her page. When her page has an answer to say it sends visual_speech_audio; this page gives the audio to shelld
+// (/api/face/play), waits until the face has played it and answers visual_speech_done. When there is no face (no model, no program) the answer is
+// reported as "not played" and her page plays the plain audio.
+const OFF = Number(location.port) - 8765;   // a simulator with an instance name has every port shifted (scripts/lib.sh)
+const BACKEND_PORT = 48765 + OFF, PAGE_PORT = 48767 + OFF, TAB = 'voice';
+const frame = document.getElementById('f');
+const dlog = m => fetch('/api/log', {method: 'POST', body: JSON.stringify({msg: 'caroline-voice ' + m})}).catch(() => {});
+const hostSend = msg => { if (frame.contentWindow) frame.contentWindow.postMessage({caroline: 'host', msg}, '*'); };
+const api = (p, body) => fetch('/api/face/' + p, body ? {method: 'POST', body: JSON.stringify(body)} : {}).then(r => r.ok ? r.json() : Promise.reject(new Error(p + ' ' + r.status)));
+const done = (id, played, extra) => hostSend(Object.assign({type: 'visual_speech_done', requestId: id, played}, extra));
+let seen = false, current = null;
+
+async function onAudio(m) {
+  const id = m.requestId;
+  try {
+    const r = await api('play', {id, audio: m.audioBase64});
+    if (!r.ok) return done(id, false);   // no face: her page plays the plain audio
+    current = id;
+    dlog('face: playing ' + id);
+    for (;;) {
+      await new Promise(res => setTimeout(res, 150));
+      const j = await api('job?id=' + encodeURIComponent(id)).catch(() => null);
+      if (!j) return done(id, false);
+      if (j.state === 'playing') continue;
+      if (current === id) current = null;
+      if (j.state === 'done') return done(id, true);
+      dlog('face: ' + id + ' not played: ' + j.why);
+      // stopped on purpose (her Stop, the tap): played, so that nothing is spoken twice; anything else: her page plays the plain audio
+      return j.why === 'stopped' || j.why === 'replaced' ? done(id, true, {stopped: true}) : done(id, false);
+    }
+  } catch (e) {
+    dlog('face: ' + e.name + ': ' + e.message);
+    done(id, false);
+  }
+}
+
+addEventListener('message', e => {
+  const d = e.data;
+  if (!d || d.caroline !== 'page' || d.tab !== TAB || !d.msg) return;
+  const m = d.msg;
+  if (m.type === 'voice_state') seen = true;
+  else if (m.type === 'visual_speech_audio') onAudio(m);
+  else if (m.type === 'visual_speech_cancel' || m.type === 'visual_speech_stop' || m.type === 'visual_speech_dismiss') api('stop', {}).catch(() => {});
+  // visual_speech_prepare / visual_speech_start need nothing here: the face renders while it plays
+});
+// a tap speaks over the answer: it stops, and the loop listens again
+document.body.onclick = () => { hostSend({type: 'voice_interrupt'}); api('stop', {}).catch(() => {}); };
+
+frame.src = `http://127.0.0.1:${PAGE_PORT}/chat.html?port=${BACKEND_PORT}&tab=${TAB}`;
+// her page is ready some time after "load"; the message is repeated until the loop answers with its first state
+const kick = setInterval(() => { if (seen) return clearInterval(kick); hostSend({type: 'voice_mode', on: true}); }, 1500);
+frame.addEventListener('load', () => hostSend({type: 'voice_mode', on: true}));
+
+// a test of the voice view (and nothing else) may have a message typed into her page: launch argument {say: "..."}
+Platform.launchArg().then(a => { if (a && a.say) setTimeout(() => hostSend({type: 'test_say', text: a.say}), 12000); }).catch(() => {});
+
+// R2 closes the view: shelld puts her continuous-dialogue switch back and ends the face itself, so nothing here has to finish first
+Platform.onClose(() => { dlog('closing'); api('stop', {}).catch(() => {}); hostSend({type: 'voice_mode', on: false}); });
+</script>
+</body>
+</html>

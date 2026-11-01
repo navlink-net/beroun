@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "assistant-chat",
+  "name": "Assistant",
+  "version": "0.1.0",
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "own"},
+  "tile": {"order": 0},
+  "state": false
+}

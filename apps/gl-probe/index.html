@@ -1,0 +1,77 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>WebGL probe (test)</title>
+<!-- What the shared window's WPE offers a 3D app: WebGL 1/2, the renderer, the system's Babylon.js (/lib/babylon/) with its loaders, materials and GUI, the cursor-key
+     camera of /lib/beroun-3d.js, and a scene that really draws, with its frame rate. Results go to the shell's log as "page: glprobe ...", ending with "done". tests/gl_probe_test.py reads them. Hidden. -->
+<script src="/platform.js"></script>
+<script src="/lib/babylon/babylon.js"></script>
+<script src="/lib/babylon/babylonjs.loaders.min.js"></script>
+<script src="/lib/babylon/babylonjs.materials.min.js"></script>
+<script src="/lib/babylon/babylon.gui.min.js"></script>
+<script src="/lib/beroun-3d.js"></script>
+<body style="margin:0;font:12px monospace;background:#111;color:#ddd">
+<canvas id="c" width="640" height="300" style="display:block;width:640px;height:300px"></canvas>
+<pre id="o" style="margin:4px"></pre>
+<script>
+const o = document.getElementById('o');
+const log = m => { o.textContent += m + '\n'; fetch('/api/log', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({msg: 'glprobe ' + m})}); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+Platform.state.get().then(() => {});
+Platform.onClose(() => Platform.state.set({}));
+log('ua=' + navigator.userAgent);
+for (const kind of ['webgl2', 'webgl']) {
+  const gl = document.createElement('canvas').getContext(kind);
+  if (!gl) { log(kind + '=null'); continue; }
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  log(kind + ' ok vendor=' + gl.getParameter(gl.VENDOR) + ' renderer=' + gl.getParameter(gl.RENDERER) +
+      (dbg ? ' unmasked=' + gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) + ' / ' + gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '') +
+      ' version=' + gl.getParameter(gl.VERSION) + ' maxTex=' + gl.getParameter(gl.MAX_TEXTURE_SIZE) + ' ext=' + gl.getSupportedExtensions().length);
+}
+log('wasm=' + typeof WebAssembly + ' instantiateStreaming=' + typeof (window.WebAssembly && WebAssembly.instantiateStreaming));
+(async () => {
+  try {
+    if (typeof BABYLON === 'undefined') throw new Error('BABYLON is not loaded from /lib/babylon/');
+    log('libs core=' + BABYLON.Engine.Version + ' loaders=' + (BABYLON.SceneLoader ? ['.glb', '.obj', '.stl'].map(e => !!BABYLON.SceneLoader.GetPluginForExtension(e) && BABYLON.SceneLoader.GetPluginForExtension(e).name).join(',') : 'none') +
+        ' materials=' + typeof BABYLON.GridMaterial + ' gui=' + typeof BABYLON.GUI + ' beroun3d=' + typeof Beroun3D);
+    const cv = document.getElementById('c');
+    const engine = Beroun3D.engine(cv, {preserveDrawingBuffer: true});
+    log('engine webGLVersion=' + engine.webGLVersion + ' renderer=' + engine.getGlInfo().renderer + ' hardwareScaling=' + engine.getHardwareScalingLevel());
+    const scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.07, 0.07, 0.1, 1);
+    const cam = Beroun3D.camera(scene, 'orbit', {radius: 8});
+    new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0, 1, 0), scene);
+    const sun = new BABYLON.DirectionalLight('d', new BABYLON.Vector3(-1, -2, -1), scene);
+    const shadows = new BABYLON.ShadowGenerator(512, sun);
+    const ground = BABYLON.MeshBuilder.CreateGround('g', {width: 10, height: 10}, scene); ground.receiveShadows = true;
+    const pbr = new BABYLON.PBRMaterial('p', scene); pbr.albedoColor = new BABYLON.Color3(0.9, 0.5, 0.1); pbr.metallic = 0.3; pbr.roughness = 0.4;
+    const boxes = [];
+    for (let i = 0; i < 20; i++) {
+      const b = BABYLON.MeshBuilder.CreateBox('b' + i, {size: 0.6}, scene);
+      b.position.set((i % 5) * 1.4 - 2.8, 0.5, Math.floor(i / 5) * 1.4 - 2.1); b.material = pbr; shadows.addShadowCaster(b); boxes.push(b);
+    }
+    let frames = 0, counting = false;
+    engine.runRenderLoop(() => { boxes.forEach((b, i) => b.rotation.y += 0.02 + i * 0.001); scene.render(); if (counting) frames++; });
+    await sleep(3000);
+    const px = new Uint8Array(4 * 64), gl = engine._gl;
+    gl.readPixels(288, 118, 8, 8, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let lit = 0; for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 60) lit++;
+    log('pixels center lit=' + lit + '/64 sample=' + [...px.slice(0, 4)].join(','));
+    // the cursor keys alone move the camera (what a held button sends), and A reaches the app; B is not touched
+    const key = (type, k) => dispatchEvent(new KeyboardEvent(type, {key: k, bubbles: true, cancelable: true}));
+    const a0 = cam.alpha, b0 = cam.beta;
+    key('keydown', 'ArrowRight'); await sleep(500); key('keyup', 'ArrowRight');
+    const a1 = cam.alpha;
+    key('keydown', 'ArrowUp'); await sleep(500); key('keyup', 'ArrowUp');
+    const b1 = cam.beta;
+    let acted = 0; const off = Beroun3D.onAction(() => acted++); key('keydown', 'Enter'); key('keyup', 'Enter'); off(); key('keydown', 'Enter'); key('keyup', 'Enter');
+    const scrolled = {y: scrollY}; const ev = new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true, cancelable: true}); dispatchEvent(ev); key('keyup', 'ArrowDown');
+    log('camera alpha moved=' + (a1 - a0).toFixed(2) + ' beta moved=' + (b1 - b0).toFixed(2) + ' action=' + acted + ' dpadScrollPrevented=' + ev.defaultPrevented);
+    counting = true; frames = 0; const t0 = performance.now();
+    await sleep(10000);
+    log('fps=' + (frames * 1000 / (performance.now() - t0)).toFixed(1) + ' (engine ' + engine.getFps().toFixed(1) + ') meshes=' + scene.meshes.length + ' draw=640x300 pbr+shadows');
+    engine.stopRenderLoop();
+  } catch (e) { log('error ' + e); }
+  log('done');
+})();
+</script>

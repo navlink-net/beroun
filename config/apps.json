@@ -1,0 +1,8 @@
+[
+  {"id": "terminal", "name": "Terminal", "kind": "native", "cmd": ["weston-terminal"], "hidden": true, "shell": true},
+  {"id": "flower",   "name": "Flower",   "kind": "native", "cmd": ["weston-flower"], "hidden": true},
+  {"id": "simple-shm", "name": "Squares", "kind": "native", "cmd": ["weston-simple-shm"], "hidden": true},
+  {"id": "gamepad-test", "name": "Gamepad test", "kind": "html", "url": "examples/gamepad-test.html", "hidden": true},
+  {"id": "screen-test", "name": "Screen test", "kind": "html", "url": "examples/screen-test.html", "hidden": true},
+  {"id": "hello-html", "name": "Hello HTML", "kind": "html", "url": "examples/hello.html", "hidden": true}
+]

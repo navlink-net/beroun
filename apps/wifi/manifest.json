@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "id": "wifi",
+  "name": "Wi-Fi",
+  "version": "1.1.0",
+  "system": true,
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "caroline": {
+    "description": "Wi-Fi: the connection state, the networks around, connecting to one",
+    "skills": ["skills"],
+    "tools": [
+      {"name": "status", "description": "Whether the device is online, and to which network", "input": {}},
+      {"name": "networks", "description": "Scans and lists the networks around: name, signal, secured or open, connected or saved", "input": {}},
+      {"name": "connect", "description": "Connects to a network from the list; a secured network that is not saved needs its password", "input": {"ssid": "string", "password": "string?"}}
+    ]
+  }
+}

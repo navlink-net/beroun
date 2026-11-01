@@ -1,0 +1,26 @@
+{
+  "format": 1,
+  "id": "minecraft",
+  "name": "Minecraft",
+  "version": "1.0.0",
+  "permissions": ["account.session"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "tile": {"order": 903},
+  "capabilities": [{"name": "Network", "scope": {"required": true}}, {"name": "ExternalDisplay"}],
+  "services": [
+    {"id": "minecraftd", "name": "Cloud Minecraft: the game server", "host": "process", "cmd": ["python3", "{app}/minecraftd.py", "{port}"], "port": 48803,
+     "start": "open", "required_by": ["minecraft"], "priority": 40, "memory_mb": 20, "sleep": false}
+  ],
+  "endpoints": [
+    {"path": "status", "methods": ["GET"], "service": "minecraftd", "access": ["page"]},
+    {"path": "node", "methods": ["GET"], "service": "minecraftd", "access": ["page"]},
+    {"path": "balance", "methods": ["GET"], "service": "minecraftd", "access": ["page"]},
+    {"path": "start", "methods": ["POST"], "service": "minecraftd", "access": ["page"]},
+    {"path": "stop", "methods": ["POST"], "service": "minecraftd", "access": ["page"]},
+    {"path": "stream", "methods": ["GET"], "service": "minecraftd", "access": ["page:minecraft-player"]},
+    {"path": "ended", "methods": ["POST"], "service": "minecraftd", "access": ["page:minecraft-player"]}
+  ],
+  "external": {"cmd": ["python3", "{sim}/apps/minecraft-player/player.py"], "state": true, "input": "game"}
+}

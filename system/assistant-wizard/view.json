@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "assistant-wizard",
+  "name": "Assistant",
+  "version": "0.1.0",
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "own"},
+  "tile": {"hidden": true},
+  "state": false
+}

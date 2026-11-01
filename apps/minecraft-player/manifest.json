@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "id": "minecraft-player",
+  "name": "Minecraft",
+  "version": "1.0.0",
+  "native": {"cmd": ["python3", "{sim}/apps/minecraft-player/player.py"], "page": "player.html"},
+  "tile": {"hidden": true}
+}

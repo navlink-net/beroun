@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "id": "ext-b",
+  "name": "Ext B (test)",
+  "version": "1.0.0",
+  "permissions": ["caroline.ask"],
+  "frontend": {
+    "entry": "index.html"
+  },
+  "state": true,
+  "tile": {
+    "hidden": true
+  },
+  "capabilities": [{"name": "ExternalDisplay"}],
+  "external": {
+    "entry": "big.html",
+    "state": true
+  }
+}

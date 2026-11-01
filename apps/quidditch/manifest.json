@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "id": "quidditch",
+  "name": "Quidditch",
+  "version": "1.0.0",
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "capabilities": [{"name": "ExternalDisplay"}],
+  "external": {"entry": "index.html", "state": true, "input": "game"},
+  "tile": {"order": 902},
+  "caroline": {
+    "description": "Quidditch, single player: start a match as one of the seven players of Gryffindor or Slytherin against the AI, pause, resume, and see how it goes",
+    "skills": ["skills"],
+    "tools": [
+      {"name": "status", "description": "What the app shows: the screen, the camera, the setup and, in a match, the time, the score, your player (place, what it holds, what A and X do now), the balls and the Snitch", "input": {}},
+      {"name": "start_match", "description": "Starts a match at once: team gryffindor or slytherin; player a slot 0..6 (0 Keeper, 1-3 Chasers, 4-5 Beaters, 6 Seeker), a role or a name; difficulty easy, normal or hard; seed for a match that can be played again", "input": {"team": "string?", "player": "string?", "difficulty": "string?", "seed": "integer?"}},
+      {"name": "pause", "description": "Pauses the match and shows the pause menu", "input": {}},
+      {"name": "resume", "description": "Goes on with a paused match", "input": {}}
+    ]
+  }
+}

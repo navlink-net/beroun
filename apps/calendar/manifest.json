@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "id": "calendar",
+  "name": "Calendar",
+  "version": "1.0.0",
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "tile": {"order": 26},
+  "services": [
+    {"id": "calendard", "name": "Calendar and tasks", "host": "process", "cmd": ["python3", "{app}/calendard.py", "{port}"], "port": 48802,
+     "start": "system", "required_by": ["calendar"], "priority": 70, "memory_mb": 20, "sleep": true}
+  ],
+  "endpoints": [
+    {"path": "events", "methods": ["GET", "POST"], "service": "calendard"},
+    {"path": "tasks", "methods": ["GET", "POST"], "service": "calendard"}
+  ],
+  "caroline": {
+    "description": "Calendar with events and a task list: add, list and delete events, add tasks, mark them done (works with the app closed)",
+    "skills": ["skills"],
+    "mcp": [
+      {"id": "planner", "transport": "stdio", "cmd": ["python3", "{app}/calendar_mcp.py", "{port}"], "service": "calendard"}
+    ],
+    "tools": [
+      {"name": "show_date", "description": "Shows a date (YYYY-MM-DD) in the month view", "input": {"date": "string"}},
+      {"name": "show_tasks", "description": "Shows the task list on the screen", "input": {}}
+    ]
+  }
+}

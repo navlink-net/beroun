@@ -1,0 +1,14 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Gamepad test</title>
+<body style="margin:0;background:#222;color:#0f0;font:16px monospace;padding:12px">
+<div>Keyboard events (mapped by config/buttons.json):</div>
+<pre id="log"></pre>
+<script>
+const log = document.getElementById('log'), lines = [];
+function add(s) { lines.unshift(s); lines.length = Math.min(lines.length, 16); log.textContent = lines.join('\n'); }
+addEventListener('keydown', e => add('down ' + e.code));
+addEventListener('keyup', e => add('up   ' + e.code));
+</script>
+</body>

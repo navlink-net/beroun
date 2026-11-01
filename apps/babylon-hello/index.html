@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Babylon 3D</title>
+<!-- The template of a 3D app: the system's Babylon.js at /lib/babylon/, a .glb of the app's own folder, and the console's buttons only:
+     the cursor turns the model (Beroun3D orbit camera), A starts and stops its spin, B closes the app. Copy this folder, change the model and the scene. -->
+<script src="/platform.js"></script>
+<script src="/lib/babylon/babylon.js"></script>
+<script src="/lib/babylon/babylonjs.loaders.min.js"></script>
+<script src="/lib/beroun-3d.js"></script>
+<body style="margin:0;background:#14161f;overflow:hidden;font:14px sans-serif;color:#cdd2e0">
+<canvas id="c" width="640" height="480" style="display:block;width:640px;height:480px;outline:none"></canvas>
+<div style="position:absolute;left:0;right:0;bottom:6px;text-align:center;opacity:.75">&#9668;&#9658;&#9650;&#9660; turn &nbsp;&middot;&nbsp; A spin &nbsp;&middot;&nbsp; B exit</div>
+<script>
+const log = m => fetch('/api/log', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({msg: 'babylon-hello ' + m})}).catch(() => {});
+let spin = true, cam = null, gem = null;
+
+(async () => {
+  const saved = (await Platform.state.get().catch(() => null)) || {};   // the app comes back to the same place
+  if (typeof saved.spin === 'boolean') spin = saved.spin;
+  const engine = Beroun3D.engine(document.getElementById('c'));
+  const scene = new BABYLON.Scene(engine);
+  scene.clearColor = new BABYLON.Color4(0.08, 0.09, 0.12, 1);
+  cam = Beroun3D.camera(scene, 'orbit', {radius: 4.2, target: new BABYLON.Vector3(0, 0.1, 0)});
+  if (saved.alpha != null) { cam.alpha = saved.alpha; cam.beta = saved.beta; }
+  new BABYLON.HemisphericLight('sky', new BABYLON.Vector3(0.3, 1, 0.2), scene).intensity = 0.8;
+  const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-1, -1.5, -0.6), scene); sun.intensity = 1.6;
+  const loaded = await BABYLON.SceneLoader.ImportMeshAsync('', '/apps/babylon-hello/', 'gem.glb', scene);
+  gem = loaded.meshes[0];
+  gem.scaling.scaleInPlace(1.3);
+  engine.runRenderLoop(() => { if (spin && gem) gem.rotate(BABYLON.Axis.Y, scene.getEngine().getDeltaTime() / 1000 * 0.6, BABYLON.Space.LOCAL); scene.render(); });
+
+  Beroun3D.onAction(() => { spin = !spin; log('spin=' + spin); });                     // A
+  addEventListener('keydown', e => { if (e.key === 'Escape') Platform.exit(); });       // B: the app's own to handle
+  Platform.onClose(() => Platform.state.set({spin, alpha: cam.alpha, beta: cam.beta}));
+  log('ready meshes=' + scene.meshes.length + ' triangles=' + scene.meshes.reduce((n, m) => n + (m.getTotalIndices ? m.getTotalIndices() / 3 : 0), 0) + ' spin=' + spin + ' webGL=' + engine.webGLVersion);
+  // the camera and the spin, to the shell's log when they change (tests/babylon_hello_test.py reads it)
+  let last = '';
+  setInterval(() => { const s = 'cam alpha=' + cam.alpha.toFixed(2) + ' beta=' + cam.beta.toFixed(2) + ' spin=' + spin; if (s !== last) { last = s; log(s); } }, 250);
+})().catch(e => log('error ' + e));
+</script>

@@ -1,0 +1,283 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Files</title>
+<meta name="viewport" content="width=640,height=480">
+<!--
+  The file manager: the folders and files of the SD card (the device's home directory).
+  The list: ".." (not at the top level), "New folder", then the folders and files.
+  A copied or moved item waits in the bar at the bottom: "Copy here" / "Move here" and "Cancel" (down arrow from the last row reaches it).
+  Touch or Enter on a folder enters it; on a file it opens the app that opens that type (Notepad for .txt), other files do nothing.
+  The "..." at the end of a row (right arrow, then Enter, with keys) opens the actions: Rename, Copy, Move, Delete.
+  B / Escape goes up one level; at the top level it leaves the app.
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #head { flex: none; height: 40px; line-height: 40px; padding: 0 14px; background: #000; color: #f2a900; font-size: 20px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #space { flex: none; height: 26px; line-height: 26px; padding: 0 14px; background: #1d242b; color: #aab; font-size: 15px; white-space: nowrap; overflow: hidden; display: flex; justify-content: space-between; }
+  #space b { color: #fff; font-weight: normal; }
+  #list { flex: 1; min-height: 0; overflow: auto; touch-action: none; }
+  .row { height: 48px; display: flex; align-items: center; padding: 0 0 0 14px; font-size: 21px; }
+  .row .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row.dir .name { color: #8cf; }
+  .row.act .name { color: #9be29b; }
+  #bar { flex: none; display: none; gap: 8px; padding: 6px; background: #000; }
+  #bar .btn { height: 44px; line-height: 44px; font-size: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; }
+  #bar .btn.off { opacity: .35; }
+  .row .more { flex: none; width: 58px; height: 48px; display: flex; align-items: center; justify-content: center; font-size: 26px; letter-spacing: 2px; }
+  .row.sel { background: #f2a900; color: #000; }
+  .row.sel .name { color: #000; }
+  .row .more.sel { background: #fff; color: #000; box-shadow: inset 0 0 0 4px #00A2ED; }
+  #msg { flex: none; min-height: 28px; line-height: 28px; padding: 0 14px; font-size: 16px; color: #ff6b6b; background: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* dialogs: the actions, the name, the delete question */
+  #dlg { position: fixed; inset: 0; background: rgba(0, 0, 0, .75); display: none; align-items: center; justify-content: center; }
+  #box { width: 420px; max-width: 94%; background: #1d242b; border-radius: 8px; padding: 14px; box-shadow: 0 6px 24px #000; }
+  #box h2 { margin: 0 0 12px; font-size: 20px; color: #f2a900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #box input { width: 100%; height: 48px; border: 0; padding: 0 12px; font: 22px "DejaVu Sans", sans-serif; background: #fff; color: #000; outline: 0; margin-bottom: 12px; }
+  .btns { display: flex; gap: 8px; }
+  .btn { flex: 1; height: 48px; line-height: 48px; text-align: center; border-radius: 6px; background: #2d3640; font-size: 20px; }
+  .btn.sel { background: #f2a900; color: #000; }
+  .opt { height: 48px; line-height: 48px; padding: 0 12px; font-size: 21px; border-radius: 6px; margin-bottom: 4px; background: #2d3640; }
+  .opt.sel { background: #f2a900; color: #000; }
+</style>
+<div id="head"></div>
+<div id="space"></div>
+<div id="list"></div>
+<div id="bar"></div>
+<div id="msg"></div>
+<div id="dlg"><div id="box"></div></div>
+<script src="/platform.js"></script>
+<script>
+  const $ = s => document.querySelector(s);
+  let cwd = '', entries = [], rows = [], sel = 0, onMore = false, clip = null, busy = false, area = 'list', bsel = 0;   // clip: {path, name, mode: 'copy'|'move'}
+  let dlg = null;                                                                                // the open dialog: {kind, sel, ...}
+
+  const join = n => (cwd ? cwd + '/' : '') + n;
+  const say = t => { $('#msg').textContent = t || ''; };
+  function errText(e) {
+    return e.status === 409 ? 'Already exists' : e.status === 404 ? 'Not found' : e.status === 403 ? 'Not allowed' : (e.message || 'Failed');
+  }
+
+  // ---- the list ---------------------------------------------------------------------------------------
+  function buildRows() {
+    rows = [];
+    if (cwd) rows.push({k: 'up'});
+    rows.push({k: 'new'});
+    entries.forEach(e => rows.push({k: 'entry', e}));
+  }
+  function draw() {
+    $('#head').textContent = '/' + cwd;
+    const list = $('#list'); list.innerHTML = '';
+    rows.forEach((r, i) => {
+      const d = document.createElement('div');
+      const isSel = i === sel;
+      d.className = 'row' + (r.k === 'entry' && r.e.dir ? ' dir' : '') + (r.k === 'new' ? ' act' : '') + (area === 'list' && isSel && !onMore ? ' sel' : '');
+      const n = document.createElement('span'); n.className = 'name';
+      n.textContent = r.k === 'up' ? '..' : r.k === 'new' ? '+ New folder' : r.e.dir ? r.e.name + '/' : r.e.name;
+      if (r.k === 'entry') n.setAttribute('translate', 'no');
+      d.appendChild(n);
+      d.onclick = () => { sel = i; onMore = false; activate(); };
+      if (r.k === 'entry') {
+        const m = document.createElement('span'); m.className = 'more' + (isSel && onMore ? ' sel' : ''); m.textContent = '···';
+        m.onclick = ev => { ev.stopPropagation(); sel = i; onMore = true; openActions(); };
+        d.appendChild(m);
+      }
+      list.appendChild(d);
+    });
+    const cur = list.children[sel]; if (cur && cur.scrollIntoView) cur.scrollIntoView({block: 'nearest'});
+    drawBar();
+  }
+  // the copied or moved item waits here until it is put down or cancelled
+  function drawBar() {
+    const bar = $('#bar');
+    if (!clip) { bar.style.display = 'none'; bar.innerHTML = ''; area = 'list'; return; }
+    bar.style.display = 'flex'; bar.innerHTML = '';
+    [{label: (clip.mode === 'move' ? 'Move' : 'Copy') + ' here', run: paste}, {label: 'Cancel', run: cancelClip}].forEach((b, i) => {
+      const d = document.createElement('div'); d.className = 'btn' + (area === 'bar' && i === bsel ? ' sel' : '');
+      d.textContent = b.label; d.onclick = () => { bsel = i; b.run(); };
+      bar.appendChild(d);
+    });
+  }
+  function cancelClip() { clip = null; area = 'list'; say(''); buildRows(); sel = Math.min(sel, rows.length - 1); draw(); }
+  // used, free and total space of the card
+  const size = n => { const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return (i < 2 ? Math.round(n) : n.toFixed(1)) + ' ' + u[i]; };
+  async function showSpace() {
+    try {
+      const s = await Platform.files.space();
+      $('#space').innerHTML = '<span>Used <b>' + size(s.used) + '</b></span><span>Free <b>' + size(s.free) + '</b></span><span>Total <b>' + size(s.total) + '</b></span>';
+    } catch (e) {}
+  }
+  async function load(keepName) {
+    showSpace();
+    try {
+      const r = await Platform.files.list(cwd, '');
+      cwd = r.path; entries = r.entries; buildRows();
+      const i = keepName ? rows.findIndex(x => x.k === 'entry' && x.e.name === keepName) : -1;
+      sel = i >= 0 ? i : Math.min(sel, rows.length - 1); if (sel < 0) sel = 0;
+      onMore = false; draw();
+    } catch (e) { say(errText(e)); }
+  }
+  function up() {
+    if (!cwd) return Platform.exit();
+    const name = cwd.split('/').pop();
+    cwd = cwd.split('/').slice(0, -1).join('/'); sel = 0; say(''); load(name);
+  }
+  async function activate() {
+    const r = rows[sel]; if (!r || busy) return;
+    say('');
+    if (r.k === 'up') return up();
+    if (r.k === 'new') return askName('New folder', '', async name => { await Platform.files.mkdir(join(name)); return name; });
+    if (r.e.dir) { cwd = join(r.e.name); sel = 0; return load(); }
+    try { await Platform.files.open(join(r.e.name)); } catch (e) { if (e.status !== 404) say(errText(e)); }   // a type nobody opens: nothing happens
+  }
+  async function paste() {
+    if (busy || !clip) return;
+    busy = true;
+    try {
+      say(clip.mode === 'move' ? 'Moving…' : 'Copying…');
+      await (clip.mode === 'move' ? Platform.files.move : Platform.files.copy)(clip.path, cwd);
+      say('');
+      if (clip.mode === 'move') clip = null;
+    } catch (e) { say(errText(e)); }
+    busy = false; load();
+  }
+
+  // ---- dialogs ----------------------------------------------------------------------------------------
+  function showDlg(html) { $('#box').innerHTML = html; $('#dlg').style.display = 'flex'; }
+  // a tap on a button must not take the focus from the field: the keyboard would go down and the layout move before the click lands
+  for (const t of ['mousedown', 'pointerdown']) $('#box').addEventListener(t, e => { if (e.target.tagName !== 'INPUT') e.preventDefault(); });
+  // a tap beside the window closes it without choosing anything
+  $('#dlg').addEventListener('click', e => { if (e.target === $('#dlg')) closeDlg(); });
+  function closeDlg() { if (document.activeElement) document.activeElement.blur(); dlg = null; $('#dlg').style.display = 'none'; $('#box').innerHTML = ''; }
+
+  // the actions of one file or folder
+  function openActions() {
+    const r = rows[sel]; if (!r || r.k !== 'entry') return;
+    const path = join(r.e.name);
+    const acts = [
+      {label: 'Rename', run: () => askName('Rename', r.e.name, async name => { await Platform.files.rename(path, name); return name; })},
+      {label: 'Copy', run: () => { clip = {path, name: r.e.name, mode: 'copy'}; buildRows(); draw(); }},
+      {label: 'Move', run: () => { clip = {path, name: r.e.name, mode: 'move'}; buildRows(); draw(); }},
+      {label: 'Delete', run: () => askDelete(r.e.name, path)},
+    ];
+    dlg = {kind: 'actions', sel: 0, acts};
+    drawActions();
+  }
+  function drawActions() {
+    const r = rows[sel];
+    showDlg('<h2 translate="no"></h2>' + dlg.acts.map((a, i) => `<div class="opt${i === dlg.sel ? ' sel' : ''}" data-i="${i}">${a.label}</div>`).join(''));
+    $('#box h2').textContent = r.e.name;
+    document.querySelectorAll('.opt').forEach(o => o.onclick = () => { dlg.sel = +o.dataset.i; runAction(); });
+  }
+  function runAction() { const a = dlg.acts[dlg.sel]; closeDlg(); a.run(); }
+
+  // a name: a new folder or a rename; the on-screen keyboard comes up with the field
+  function askName(title, value, apply) {
+    dlg = {kind: 'name', sel: 0, apply};
+    showDlg('<h2></h2><input id="nm" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"><div class="btns"><div class="btn" id="ok">OK</div><div class="btn" id="cancel">Cancel</div></div>');
+    $('#box h2').textContent = title;
+    const inp = $('#nm'); inp.value = value;
+    $('#ok').onclick = submitName; $('#cancel').onclick = closeDlg;
+    inp.focus(); inp.select();
+  }
+  async function submitName() {
+    const name = $('#nm').value.trim(), apply = dlg.apply;
+    if (!name) return;
+    closeDlg(); busy = true;
+    try { const n = await apply(name); say(''); busy = false; await load(n); }
+    catch (e) { busy = false; say(e.status === 400 ? 'Invalid name' : errText(e)); }
+  }
+
+  function askDelete(name, path) {
+    dlg = {kind: 'delete', sel: 1, path};   // "No" is the default
+    showDlg('<h2>Delete?</h2><div style="font-size:20px;margin-bottom:14px;overflow:hidden;text-overflow:ellipsis" translate="no" id="dn"></div><div class="btns"><div class="btn" id="yes">Delete</div><div class="btn" id="no">Cancel</div></div>');
+    $('#dn').textContent = name;
+    $('#yes').onclick = () => { dlg.sel = 0; confirmDelete(); };
+    $('#no').onclick = closeDlg;
+    markDelete();
+  }
+  function markDelete() { $('#yes').classList.toggle('sel', dlg.sel === 0); $('#no').classList.toggle('sel', dlg.sel === 1); }
+  async function confirmDelete() {
+    const path = dlg.path; closeDlg(); busy = true;
+    try { await Platform.files.remove(path); if (clip && (clip.path === path || clip.path.startsWith(path + '/'))) clip = null; say(''); }
+    catch (e) { say(errText(e)); }
+    busy = false; load();
+  }
+
+  // ---- keys: arrows and Enter, Escape (B) goes up -----------------------------------------------------
+  addEventListener('keydown', e => {
+    const k = e.key;
+    if (dlg) {
+      if (dlg.kind === 'name') {
+        if (k === 'Enter') { e.preventDefault(); submitName(); } else if (k === 'Escape') { e.preventDefault(); closeDlg(); }
+        return;   // the other keys type into the field
+      }
+      if (dlg.kind === 'actions') {
+        if (k === 'ArrowDown') dlg.sel = Math.min(dlg.acts.length - 1, dlg.sel + 1);
+        else if (k === 'ArrowUp') dlg.sel = Math.max(0, dlg.sel - 1);
+        else if (k === 'Enter') { e.preventDefault(); return runAction(); }
+        else if (k === 'Escape') { e.preventDefault(); return closeDlg(); }
+        else return;
+        e.preventDefault(); return drawActions();
+      }
+      if (dlg.kind === 'delete') {
+        if (k === 'ArrowLeft') dlg.sel = 0; else if (k === 'ArrowRight') dlg.sel = 1;
+        else if (k === 'Enter') { e.preventDefault(); return dlg.sel === 0 ? confirmDelete() : closeDlg(); }
+        else if (k === 'Escape') { e.preventDefault(); return closeDlg(); }
+        else return;
+        e.preventDefault(); return markDelete();
+      }
+    }
+    if (area === 'bar') {   // the Copy/Move here and Cancel buttons
+      if (k === 'ArrowLeft') bsel = 0; else if (k === 'ArrowRight') bsel = 1;
+      else if (k === 'ArrowUp') area = 'list';
+      else if (k === 'Enter') { e.preventDefault(); return bsel === 0 ? paste() : cancelClip(); }
+      else if (k === 'Escape') { e.preventDefault(); return up(); }
+      else if (k !== 'ArrowDown') return;
+      e.preventDefault(); return draw();
+    }
+    if (k === 'ArrowUp') { onMore = false; sel = Math.max(0, sel - 1); }
+    else if (k === 'ArrowDown') { onMore = false; if (sel >= rows.length - 1 && clip) { area = 'bar'; bsel = 0; } else sel = Math.min(rows.length - 1, sel + 1); }
+    else if (k === 'ArrowRight') { if (rows[sel] && rows[sel].k === 'entry') onMore = true; }
+    else if (k === 'ArrowLeft') onMore = false;
+    else if (k === 'Enter') { e.preventDefault(); return onMore ? openActions() : activate(); }
+    else if (k === 'Escape') { e.preventDefault(); return up(); }
+    else return;
+    e.preventDefault(); draw();
+  });
+
+  // the dialog stays above the on-screen keyboard
+  addEventListener('osk', e => { $('#dlg').style.paddingBottom = e.detail.height + 'px'; });
+
+  // drag to scroll the list with the touchscreen
+  (() => {
+    const l = $('#list'); let d = null, dragged = false;
+    l.addEventListener('pointerdown', e => { d = {y: e.clientY, st: l.scrollTop}; dragged = false; });
+    l.addEventListener('pointermove', e => { if (!d) return; const dy = e.clientY - d.y; if (!dragged && Math.abs(dy) > 8) { dragged = true; l.setPointerCapture(e.pointerId); } if (dragged) l.scrollTop = d.st - dy; });
+    l.addEventListener('pointerup', () => { d = null; }); l.addEventListener('pointercancel', () => { d = null; });
+    l.addEventListener('click', e => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+  })();
+
+  // back at the same place as when it was closed: the folder and the entry (the app shares its window with the others)
+  Platform.onClose(() => Platform.state.set({cwd, name: rows[sel] && rows[sel].k === 'entry' ? rows[sel].e.name : ''}));
+  (async () => {
+    const st = await Platform.state.get().catch(() => null);
+    if (st && typeof st.cwd === 'string' && st.cwd) {
+      try { await Platform.files.list(st.cwd, ''); cwd = st.cwd; } catch (e) { /* the folder is gone: the top of the card */ }
+    }
+    load(st && cwd ? st.name : '');
+  })();
+  // Caroline's tools for this page (manifest: "caroline"): which folder the window shows, and showing one
+  const listing = () => '/' + cwd + '\n' + (entries.map(e => (e.dir ? e.name + '/' : e.name)).join('\n') || '(empty)');
+  Platform.tools.handle('current_folder', async () => listing());
+  Platform.tools.handle('show_folder', async args => {
+    const path = String(args.path || '').replace(/^\/+|\/+$/g, '');
+    await Platform.files.list(path, '');      // rejects when there is no such folder
+    cwd = path; sel = 0; say('');
+    await load();
+    return listing();
+  });
+
+</script>

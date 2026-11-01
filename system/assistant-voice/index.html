@@ -1,0 +1,183 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=640,initial-scale=1">
+<title>Assistant (voice)</title>
+<script src="/platform.js"></script>
+<style>
+  /* the window is transparent: over whatever is on the screen only a strip at the bottom says what the dialogue does */
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; font-family: "DejaVu Sans", sans-serif; }
+  #pill { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: 600px; min-width: 220px; box-sizing: border-box;
+          padding: 9px 16px; border-radius: 22px; background: rgba(0, 0, 0, .82); color: #fff; display: flex; align-items: center; gap: 12px; }
+  #dot { flex: none; width: 16px; height: 16px; border-radius: 50%; background: #9aa4ad; }
+  #pill.listening #dot { background: #3ecf6e; }
+  #pill.hearing #dot { background: #3ecf6e; animation: beat .6s infinite alternate; }
+  #pill.thinking #dot { background: #f2a900; animation: beat 1s infinite alternate; }
+  #pill.speaking #dot { background: #4aa3ff; animation: beat .4s infinite alternate; }
+  #pill.error #dot { background: #ff6b6b; }
+  @keyframes beat { from { transform: scale(.7); } to { transform: scale(1.15); } }
+  #txt { min-width: 0; }
+  #state { font-size: 15px; color: #f2a900; font-weight: bold; }
+  #line { font-size: 15px; line-height: 1.3; max-height: 3.9em; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #line:empty { display: none; }
+</style>
+</head>
+<body>
+<div id="pill"><div id="dot"></div><div id="txt"><div id="state" translate="no"></div><div id="line"></div></div></div>
+<script>
+// The standard voice view of OS Beroun (docs/assistant-contract.md): the continuous voice dialogue of an assistant that has no voice of its own (Claude, Codex).
+// R2 opens it over whatever is on the screen and R2 closes it. One loop: the microphone is listened to (a level gate finds the start and the end of an utterance),
+// the utterance goes to the system's speech recognition (POST /api/stt/audio: ai:stt and the transcript checks), the text to the assistant's backend (the chat
+// protocol of the contract, its tab "voice"), its answer to speech (POST /api/assistant/speech: ai:tts; both on the owner's SW subscription), the sound is played,
+// and it listens again. Half duplex: nothing is heard while it thinks or speaks. A (Enter): it stops speaking (or the turn that runs) and listens again.
+const $ = s => document.querySelector(s);
+const pill = $('#pill');
+const dlog = m => fetch('/api/log', {method: 'POST', body: JSON.stringify({msg: 'assistant-voice ' + m})}).catch(() => {});
+const PREFIX = '[Said aloud by the owner in the voice dialogue (R2). Your answer is spoken: answer briefly, in plain sentences, without lists, tables, code or links.]\n\n';
+const RATE = 16000, START_MS = 180, END_MS = 900, MAX_MS = 30000, MIN_LEVEL = 0.012;
+let name = 'Assistant', ws = null, port = null, mode = 'starting', parts = [], audio = null, stream = null, ctx = null, closing = false;
+
+function show(state, line) {
+  mode = state;
+  pill.className = state;
+  $('#state').textContent = Platform.t({starting: 'Starting…', listening: 'Listening', hearing: 'Listening', thinking: 'Thinking…', speaking: name, error: name}[state] || state);
+  if (line !== undefined) $('#line').textContent = line;
+}
+function listen(line) { show('listening', line === undefined ? '' : line); }
+
+// ---- the assistant: the chat protocol of the contract, tab "voice" ---------------------------------------------------------------------------
+async function connect() {
+  if (closing) return;
+  let info = null;
+  try { info = await (await fetch('/api/assistant/status')).json(); } catch (e) {}
+  if (info && info.name) name = info.name;
+  if (!info || !info.running || !info.port) { show('starting'); return setTimeout(connect, 2000); }
+  if (info.signed_in === false) { show('error', Platform.t('Not signed in yet: Settings > Assistant.')); return setTimeout(connect, 5000); }
+  port = info.port;
+  ws = new WebSocket(`ws://127.0.0.1:${port}/?tab=voice`);
+  ws.onopen = () => { if (mode === 'starting') listen(); };
+  ws.onmessage = e => {
+    let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+    if (m.type === 'error' && mode === 'thinking') { listen(m.message || ''); return; }
+    if (m.type !== 'sdk_message' || mode !== 'thinking') return;
+    const evt = m.message || {};
+    if (evt.type === 'assistant') {
+      const blocks = (evt.message && evt.message.content) || [];
+      if (blocks.some(b => b.type === 'tool_use')) return;   // a remark beside a tool call is narration, not the answer
+      for (const b of blocks) if (b.type === 'text' && b.text && !b.text.includes('[[NO_UPDATE]]')) parts.push(b.text);
+    } else if (evt.type === 'result') {
+      const said = parts.join('\n\n').trim();
+      parts = [];
+      if (evt.is_error || String(evt.subtype || '').startsWith('error')) return listen(evt.result || Platform.t('The answer could not be finished'));
+      said ? speak(said) : listen();
+    }
+  };
+  ws.onclose = () => { ws = null; if (!closing) { show('starting'); setTimeout(connect, 2000); } };
+}
+function ask(text) {
+  if (!ws || ws.readyState !== 1) return listen(Platform.t('connecting…'));
+  parts = [];
+  show('thinking', text);
+  ws.send(JSON.stringify({type: 'user_message', text: PREFIX + text}));
+}
+
+// ---- its voice -------------------------------------------------------------------------------------------------------------------------------
+async function speak(text) {
+  show('speaking', text);
+  try {
+    const r = await fetch('/api/assistant/speech', {method: 'POST', body: JSON.stringify({text})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    if (!j.audio || mode !== 'speaking') return mode === 'speaking' && listen();
+    audio = new Audio(`data:${j.mime || 'audio/mpeg'};base64,${j.audio}`);
+    audio.onended = audio.onerror = () => { audio = null; if (mode === 'speaking') listen(); };
+    await audio.play();
+  } catch (e) {
+    dlog('speech: ' + e.message);
+    if (mode === 'speaking') listen(text);   // the text stays on the screen when it cannot be said
+  }
+}
+function stopSpeaking() { if (audio) { audio.onended = audio.onerror = null; audio.pause(); audio = null; } }
+
+// ---- the microphone: a level gate, then one utterance as a WAV ---------------------------------------------------------------------------------
+function wav(chunks, rate) {
+  let n = 0; for (const c of chunks) n += c.length;
+  const step = rate / RATE, out = new Int16Array(Math.floor(n / step));
+  let i = 0, pos = 0;
+  const all = new Float32Array(n); for (const c of chunks) { all.set(c, pos); pos += c.length; }
+  for (let k = 0; k < out.length; k++, i += step) out[k] = Math.max(-1, Math.min(1, all[Math.floor(i)])) * 0x7fff;
+  const buf = new ArrayBuffer(44 + out.length * 2), v = new DataView(buf);
+  const s = (o, t) => { for (let k = 0; k < t.length; k++) v.setUint8(o + k, t.charCodeAt(k)); };
+  s(0, 'RIFF'); v.setUint32(4, 36 + out.length * 2, true); s(8, 'WAVE'); s(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, RATE, true); v.setUint32(28, RATE * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); s(36, 'data'); v.setUint32(40, out.length * 2, true);
+  new Int16Array(buf, 44).set(out);
+  let bin = ''; const b = new Uint8Array(buf);
+  for (let k = 0; k < b.length; k += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(k, k + 0x8000));
+  return btoa(bin);
+}
+async function recognize(chunks, rate) {
+  show('thinking', '');
+  try {
+    const r = await fetch('/api/stt/audio', {method: 'POST', body: JSON.stringify({audio: wav(chunks, rate), format: 'wav'})});
+    const j = await r.json();
+    if (!r.ok) return listen(Platform.t(j.kind === 'balance' ? 'Insufficient balance' : j.kind === 'network' ? 'No network' : 'Speech recognition failed'));
+    const text = (j.text || '').trim();
+    text ? ask(text) : listen();
+  } catch (e) {
+    listen(Platform.t('Speech recognition failed'));
+  }
+}
+async function microphone() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true}});
+  } catch (e) {
+    dlog('microphone: ' + e.message);
+    return show('error', Platform.t('No microphone'));
+  }
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = ctx.createMediaStreamSource(stream), node = ctx.createScriptProcessor(4096, 1, 1);
+  let floor = 0.005, speech = [], loud = 0, quiet = 0, pre = [];
+  node.onaudioprocess = e => {
+    const x = e.inputBuffer.getChannelData(0), ms = 1000 * x.length / ctx.sampleRate;
+    if (mode !== 'listening' && mode !== 'hearing') { speech = []; loud = quiet = 0; return; }
+    let sum = 0; for (let k = 0; k < x.length; k++) sum += x[k] * x[k];
+    const level = Math.sqrt(sum / x.length), gate = Math.max(MIN_LEVEL, floor * 3);
+    const chunk = new Float32Array(x);
+    if (mode === 'listening') {
+      if (level < gate) floor = floor * 0.95 + level * 0.05;   // the room's own noise, followed slowly
+      pre.push(chunk); if (pre.length > 3) pre.shift();       // the beginning of a word is kept
+      loud = level >= gate ? loud + ms : 0;
+      if (loud >= START_MS) { speech = pre.slice(); pre = []; quiet = 0; show('hearing'); }
+      return;
+    }
+    speech.push(chunk);
+    quiet = level < gate ? quiet + ms : 0;
+    const len = speech.length * ms;
+    if (quiet >= END_MS || len >= MAX_MS) { const got = speech; speech = []; loud = quiet = 0; recognize(got, ctx.sampleRate); }
+  };
+  src.connect(node); node.connect(ctx.destination);
+}
+
+// ---- keys, the end -------------------------------------------------------------------------------------------------------------------------------
+addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || e.defaultPrevented) return;
+  e.preventDefault();
+  if (mode === 'speaking') { stopSpeaking(); listen(); }
+  else if (mode === 'thinking' && ws && ws.readyState === 1) { ws.send(JSON.stringify({type: 'interrupt'})); listen(); }
+});
+Platform.onClose(() => {
+  closing = true; dlog('closing'); stopSpeaking();
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (ctx) ctx.close().catch(() => {});
+  if (ws) ws.close();
+});
+// a test of the voice view may give it a sentence instead of the microphone: launch argument {say: "..."}
+Platform.launchArg().then(a => { if (a && a.say) { const go = () => (ws && ws.readyState === 1 && mode === 'listening') ? ask(a.say) : setTimeout(go, 500); go(); } }).catch(() => {});
+show('starting');
+connect();
+microphone();
+</script>
+</body>
+</html>

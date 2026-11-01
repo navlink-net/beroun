@@ -1,0 +1,6 @@
+[{"code":"en","name":"English"},{"code":"ru","name":"Русский"},{"code":"uk","name":"Українська"},{"code":"de","name":"Deutsch"},
+ {"code":"fr","name":"Français"},{"code":"es","name":"Español"},{"code":"it","name":"Italiano"},{"code":"nl","name":"Nederlands"},
+ {"code":"pt","name":"Português"},{"code":"pl","name":"Polski"},{"code":"cs","name":"Čeština"},{"code":"sk","name":"Slovenčina"},
+ {"code":"ro","name":"Română"},{"code":"hu","name":"Magyar"},{"code":"fi","name":"Suomi"},{"code":"sv","name":"Svenska"},
+ {"code":"et","name":"Eesti"},{"code":"el","name":"Ελληνικά"},{"code":"he","name":"עברית"},{"code":"no","name":"Norsk"},
+ {"code":"da","name":"Dansk"},{"code":"tr","name":"Türkçe"}]

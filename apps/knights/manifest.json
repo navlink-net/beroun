@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "knights",
+  "name": "Knights & Ladies",
+  "version": "1.0.0",
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "capabilities": [{"name": "ExternalDisplay"}],
+  "external": {"entry": "index.html", "state": true, "input": "game"},
+  "tile": {"order": 901}
+}

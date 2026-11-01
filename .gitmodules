@@ -1,0 +1,3 @@
+[submodule "caroline"]
+	path = caroline
+	url = https://github.com/kostiakhait/caroline.git

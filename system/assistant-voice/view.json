@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "id": "assistant-voice",
+  "name": "Assistant (voice)",
+  "version": "0.1.0",
+  "frontend": {"entry": "index.html", "window": "own", "microphone": true, "transparent": true},
+  "tile": {"hidden": true},
+  "state": false
+}

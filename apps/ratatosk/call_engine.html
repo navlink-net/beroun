@@ -1,0 +1,117 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<html><head><meta charset="utf-8"><title>Ratatosk call engine</title>
+<!-- The media of a call on Android: what runtime/ratatosk_call_engine.py is on the other platforms, with the WebView's WebRTC and livekit-client.
+     It has no screen. runtime/ratatosk_webengine.py hands it the room and the commands over the API of shelld and takes the events and the pictures back (the same events). -->
+<script src="vendor/livekit-client.umd.js"></script>
+</head><body style="background:transparent">
+<script>
+(async () => {
+  const API = '/api/rt/';
+  const post = (path, body) => fetch(API + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})}).catch(() => {});
+  const emit = ev => post('call-engine-event', ev);
+  const LK = window.LivekitClient;
+  let room = null, ending = false, muted = false, cfg = null;
+  const tiles = new Map();       // track sid -> {n, video, identity}
+  const MAX_TILES = 4, SHOW_W = 640, SHOW_H = 400, SHOW_FPS = 15;
+
+  try { cfg = await (await fetch(API + 'call-engine-config')).json(); } catch (e) { return emit({ev: 'error', message: 'no configuration: ' + e}); }
+  if (!cfg.url) return emit({ev: 'error', message: 'no room'});
+
+  // ---- the ringing tone of a call we placed, until somebody joins (the other platforms' ringback: 440 + 480 Hz, two seconds on, four off)
+  let ring = null;
+  function ringStart() {
+    if (ring) return;
+    const ac = new AudioContext(), g = ac.createGain(); g.gain.value = 0; g.connect(ac.destination);
+    for (const f of [440, 480]) { const o = ac.createOscillator(); o.frequency.value = f; o.connect(g); o.start(); }
+    const beat = () => { g.gain.setTargetAtTime(0.15, ac.currentTime, 0.01); g.gain.setTargetAtTime(0, ac.currentTime + 2, 0.01); };
+    beat(); ring = {ac, timer: setInterval(beat, 6000)};
+    emit({ev: 'ringback', on: true});
+  }
+  function ringStop() {
+    if (!ring) return;
+    clearInterval(ring.timer); ring.ac.close(); ring = null;
+    emit({ev: 'ringback', on: false});
+  }
+
+  // ---- the room
+  room = new LK.Room({adaptiveStream: false, dynacast: false});
+  const seen = new Set();
+  function joined(p) { if (seen.has(p.identity)) return; seen.add(p.identity); ringStop(); emit({ev: 'remote_joined', identity: p.identity}); }
+  room.on(LK.RoomEvent.ParticipantConnected, joined);
+  room.on(LK.RoomEvent.ParticipantDisconnected, p => { seen.delete(p.identity); emit({ev: 'remote_left', identity: p.identity}); });
+  room.on(LK.RoomEvent.Reconnecting, () => emit({ev: 'reconnecting'}));
+  room.on(LK.RoomEvent.Reconnected, () => emit({ev: 'reconnected'}));
+  room.on(LK.RoomEvent.Disconnected, reason => { if (!ending) emit({ev: 'disconnected', reason: String(reason)}); });
+  room.on(LK.RoomEvent.TrackSubscribed, (track, pub, p) => {
+    if (track.kind === LK.Track.Kind.Audio) { const a = track.attach(); a.autoplay = true; document.body.appendChild(a); a.play().catch(() => {}); return; }
+    if (track.kind !== LK.Track.Kind.Video || tiles.size >= MAX_TILES) return;
+    const used = new Set([...tiles.values()].map(t => t.n)); let n = 0; while (used.has(n)) n++;
+    const v = track.attach(); v.muted = true; v.playsInline = true; v.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0.01'; document.body.appendChild(v);
+    tiles.set(track.sid, {n, video: v, identity: p.identity});
+    emit({ev: 'remote_video', on: true, identity: p.identity, tile: n});
+  });
+  room.on(LK.RoomEvent.TrackUnsubscribed, (track, pub, p) => {
+    track.detach().forEach(e => e.remove());
+    const t = tiles.get(track.sid);
+    if (t) { tiles.delete(track.sid); emit({ev: 'remote_video', on: false, identity: t.identity, tile: t.n}); }
+  });
+
+  // ---- the pictures: the other side's tiles and the own camera, as JPEG into the files the call screen's motion JPEG reads
+  const cv = document.createElement('canvas'); const cx = cv.getContext('2d');
+  let frames = 0, last = Date.now();
+  function snap(video, which, w, h) {
+    if (!video.videoWidth) return false;
+    const k = Math.min(w / video.videoWidth, h / video.videoHeight, 1);
+    cv.width = Math.max(2, Math.round(video.videoWidth * k)); cv.height = Math.max(2, Math.round(video.videoHeight * k));
+    cx.drawImage(video, 0, 0, cv.width, cv.height);
+    post('call-engine-frame', {which, jpeg: cv.toDataURL('image/jpeg', 0.6).split(',')[1]});
+    return true;
+  }
+  let localVideo = null;
+  setInterval(() => {
+    for (const t of tiles.values()) if (snap(t.video, t.n === 0 ? 'remote' : 'remote-' + t.n, SHOW_W, SHOW_H)) frames++;
+    if (localVideo) snap(localVideo, 'local', 160, 120);
+  }, 1000 / SHOW_FPS);
+
+  setInterval(() => {   // every second: the level of each person whose sound arrives, and the pictures per second
+    for (const p of room.remoteParticipants.values()) emit({ev: 'remote_audio', identity: p.identity, rms: Math.round(p.audioLevel * 3000), pitch: 0, frames: 0});
+    const now = Date.now(), fps = Math.round(frames * 1000 / (now - last)); frames = 0; last = now;
+    for (const t of tiles.values()) emit({ev: 'video_stats', identity: t.identity, tile: t.n, fps, w: t.video.videoWidth, h: t.video.videoHeight});
+  }, 1000);
+
+  // ---- the camera and the microphone
+  async function camera(on) {
+    try {
+      if (!on) { await room.localParticipant.setCameraEnabled(false); localVideo = null; return emit({ev: 'camera', state: 'off'}); }
+      const pub = await room.localParticipant.setCameraEnabled(true, {resolution: {width: 320, height: 240, frameRate: 15}});
+      if (!pub || !pub.track) return emit({ev: 'camera', state: 'none', reason: 'no camera'});
+      localVideo = pub.track.attach(); localVideo.muted = true; localVideo.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0.01'; document.body.appendChild(localVideo);
+      emit({ev: 'camera', state: 'on'});
+    } catch (e) { emit({ev: 'camera', state: 'none', reason: String(e)}); }
+  }
+
+  try {
+    await room.connect(cfg.url, cfg.token);
+    await room.localParticipant.setMicrophoneEnabled(true);
+    emit({ev: 'connected'});
+    room.remoteParticipants.forEach(joined);
+    if (cfg.ringback && !seen.size) ringStart();
+    if (cfg.video) camera(true);
+  } catch (e) { return emit({ev: 'error', message: String(e && e.message || e)}); }
+
+  // ---- the commands of the controller (a long poll): mute, unmute, camera on, camera off, hangup
+  while (!ending) {
+    let cmds = [];
+    try { cmds = (await (await fetch(API + 'call-engine-poll')).json()).commands || []; }
+    catch (e) { await new Promise(r => setTimeout(r, 1000)); continue; }
+    for (const c of cmds) {
+      if (c === 'mute' || c === 'unmute') { muted = c === 'mute'; await room.localParticipant.setMicrophoneEnabled(!muted); }
+      else if (c === 'camera on') camera(true);
+      else if (c === 'camera off') camera(false);
+      else if (c === 'hangup') { ending = true; ringStop(); await room.disconnect(); }
+    }
+  }
+  await emit({ev: 'bye'});
+})();
+</script></body></html>

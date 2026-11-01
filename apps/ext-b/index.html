@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Ext B (test)</title>
+<!-- A scripted test app for the external screen (tests/extapi_test.py): the console page is the remote. It counts, remembers its count (Platform.state), opens/closes its big page and
+     shows the messages that come from it. Hidden from the launcher. -->
+<script src="/platform.js"></script>
+<body style="font:20px sans-serif;background:#222;color:#eee">
+<h3>ext-b console</h3>
+<pre id="o"></pre>
+<button id="bo" onclick="op()">open big</button>
+<button id="bc" onclick="cl()">close big</button>
+<button id="bp" onclick="ping()">ping</button>
+<button id="bi" onclick="n++;show()">inc</button>
+<script>
+let n = 0, msgs = [], evs = [], err = '', seq = 0;
+const o = document.getElementById('o');
+const show = () => { o.textContent = 'console count=' + n + ' msgs=' + JSON.stringify(msgs) + ' events=' + evs.join(',') + ' err=' + err; };
+const fail = e => { err = (e && e.status ? e.status + ' ' : '') + (e && e.message || e); show(); };
+const op = () => Platform.display.open({from: 'ext-b'}).then(() => { err = ''; show(); }, fail);
+const cl = () => Platform.display.close().then(() => { err = ''; show(); }, fail);
+const ping = () => Platform.display.send({ping: ++seq}).then(r => { msgs.push('sent:' + JSON.stringify(r)); show(); }, fail);
+Platform.state.get().then(s => { if (s) n = s.n; show(); });
+Platform.onClose(() => Platform.state.set({n}));
+Platform.display.onMessage(m => { msgs.push(m); show(); });
+Platform.display.on(e => { evs.push(e.event); show(); });
+show();
+</script>

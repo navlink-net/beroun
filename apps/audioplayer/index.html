@@ -1,0 +1,483 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Music</title>
+<meta name="viewport" content="width=640,height=480">
+<!--
+  The audio player: plays the audio files of the SD card, a folder at a time, or a playlist (.m3u / .m3u8).
+  Keys: the cursor keys, Enter (A) and Escape (B). There is no other key mapping.
+  Browse   Up / Down select, Enter opens a folder, plays a file (the files of its folder follow it) or loads a playlist.
+           Escape (B) goes up one level; at the top level it leaves the app.
+           Every folder row has a play button (touch / mouse): it plays the folder with all its subfolders.
+  Playing  Up / Down select a queue row, Enter plays it (on the playing one: pause), Left / Right seek 10 s.
+           Escape (B) goes back to the browser.
+           Touch / mouse: the button row (previous, rewind, play / pause, stop, fast forward, next, order); rewind and fast forward
+           seek 10 s on a tap and scan while held.
+  The menu (stop, queue, playlists) and the switch between the two screens had keys only; their code is still here.
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #head { flex: none; height: 40px; line-height: 40px; padding: 0 14px; background: #000; color: #f2a900; font-size: 20px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #foot { flex: none; height: 26px; line-height: 26px; padding: 0 14px; background: #1d242b; color: #aab; font-size: 14px; white-space: nowrap; overflow: hidden; }
+  #msg { flex: none; height: 0; overflow: hidden; background: #3a2a00; color: #f2a900; font-size: 16px; padding: 0 14px; line-height: 28px; white-space: nowrap; }
+  #msg.on { height: 28px; }
+  #browse, #play { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  #browse.on, #play.on { display: flex; }
+  .list { flex: 1; min-height: 0; overflow: auto; touch-action: none; }
+  .row { height: 44px; display: flex; align-items: center; padding: 0 14px; gap: 10px; font-size: 20px; }
+  .row .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .tag { flex: none; font-size: 15px; opacity: .7; }
+  .row.dir .name { color: #8cf; }
+  .row.pl .name { color: #9be29b; }
+  .pbtn { flex: none; width: 48px; height: 34px; border: 0; border-radius: 17px; background: #f2a900; color: #000; display: flex; align-items: center; justify-content: center; padding: 0; margin-right: -6px; }
+  .pbtn svg { width: 22px; height: 22px; fill: currentColor; pointer-events: none; }
+  .pbtn:active { background: #ffc43a; }
+  .row.sel .pbtn { background: #000; color: #f2a900; }
+  .row.cur .name { color: #f2a900; font-weight: bold; }
+  .row.sel { background: #f2a900; color: #000; }
+  .row.sel .name, .row.sel .tag { color: #000; }
+  #mini { flex: none; height: 30px; line-height: 30px; padding: 0 14px; background: #000; color: #f2a900; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: none; }
+  #mini.on { display: block; }
+  #now { flex: none; padding: 12px 14px 4px; }
+  #info { display: flex; align-items: center; gap: 16px; }
+  #cover { flex: none; width: 92px; height: 92px; border-radius: 10px; background: linear-gradient(145deg, #2d3640, #1a2027); color: #f2a900; display: flex; align-items: center; justify-content: center; }
+  #cover svg { width: 56px; height: 56px; }
+  #meta { flex: 1; min-width: 0; }
+  #title { font-size: 26px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 34px; }
+  #sub { font-size: 16px; color: #8a949e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 22px; }
+  #state { font-size: 15px; color: #9be29b; margin-top: 4px; min-height: 20px; }
+  #bar { margin-top: 12px; height: 12px; border-radius: 6px; background: #2d3640; overflow: hidden; }
+  #fill { height: 100%; width: 0; background: #f2a900; }
+  #times { display: flex; justify-content: space-between; font-size: 15px; color: #aab; margin-top: 4px; }
+  #ctl { flex: none; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 6px 14px 8px; }
+  .btn { flex: none; width: 62px; height: 52px; border: 0; border-radius: 12px; background: #232b33; color: #e8ecef; display: flex; align-items: center; justify-content: center; padding: 0; touch-action: none; }
+  .btn svg { width: 30px; height: 30px; fill: currentColor; pointer-events: none; }
+  .btn:active, .btn.hold { background: #3a4651; }
+  .btn.dis { opacity: .35; }
+  #bplay { width: 84px; height: 68px; border-radius: 34px; background: #f2a900; color: #000; }
+  #bplay:active { background: #ffc43a; }
+  #bplay svg { width: 40px; height: 40px; }
+  #border { color: #8a949e; }
+  #border.on { color: #f2a900; }
+  #menu { position: fixed; inset: 0; background: rgba(0, 0, 0, .75); display: none; align-items: center; justify-content: center; z-index: 10; }
+  #menu.on { display: flex; }
+  #mbox { width: 440px; background: #1d242b; border-radius: 8px; padding: 6px 0; }
+  #mbox .row { height: 48px; font-size: 21px; }
+</style>
+<div id="head"></div>
+<div id="msg"></div>
+<div id="browse"><div id="blist" class="list"></div><div id="mini"></div></div>
+<div id="play">
+  <div id="now">
+    <div id="info">
+      <div id="cover"></div>
+      <div id="meta"><div id="title"></div><div id="sub"></div><div id="state"></div></div>
+    </div>
+    <div id="bar"><div id="fill"></div></div>
+    <div id="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
+  </div>
+  <div id="ctl">
+    <button class="btn" id="bprev" aria-label="Previous"></button>
+    <button class="btn" id="brew" aria-label="Rewind"></button>
+    <button class="btn" id="bplay" aria-label="Play / Pause"></button>
+    <button class="btn" id="bstop" aria-label="Stop"></button>
+    <button class="btn" id="bffw" aria-label="Fast forward"></button>
+    <button class="btn" id="bnext" aria-label="Next"></button>
+    <button class="btn" id="border" aria-label="Order"></button>
+  </div>
+  <div id="qlist" class="list"></div>
+</div>
+<div id="foot"></div>
+<div id="menu"><div id="mbox"></div></div>
+<script src="/platform.js"></script>
+<script>
+  const $ = s => document.querySelector(s);
+  const AUDIO = ['mp3', 'ogg', 'oga', 'opus', 'flac', 'wav', 'm4a', 'aac'], LISTS = ['m3u', 'm3u8'];
+  const ext = n => (n.split('.').pop() || '').toLowerCase();
+  const isAudio = n => AUDIO.includes(ext(n)), isList = n => LISTS.includes(ext(n));
+  const base = p => p.split('/').pop(), dirOf = p => p.split('/').slice(0, -1).join('/');
+  const stem = n => n.replace(/\.[^.]*$/, '');
+  const join = (d, n) => (d ? d + '/' : '') + n;
+  const nat = (x, y) => x.localeCompare(y, undefined, {numeric: true, sensitivity: 'base'});
+  const T = s => Platform.t(s);
+
+  const a = new Audio();
+  a.preload = 'auto';
+  let view = 'browse', cwd = '', rows = [], sel = 0;
+  let queue = [], qi = -1, qsel = 0, order = 0, fails = 0;   // order: index into ORDERS
+  const ORDERS = ['Normal', 'Repeat all', 'Repeat one', 'Shuffle'];
+  let menu = null, msgTimer = null, busy = false;
+
+  function say(text) {
+    const m = $('#msg'); m.textContent = text; m.classList.add('on');
+    clearTimeout(msgTimer); msgTimer = setTimeout(() => m.classList.remove('on'), 3500);
+  }
+  const fmt = s => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+
+  // ---- the card -------------------------------------------------------------------------------
+  async function entries(path) {
+    return (await Platform.files.list(path)).entries;
+  }
+  // the audio files of a folder (and of its subfolders when deep), in name order
+  async function collect(path, deep, out = []) {
+    const es = await entries(path);
+    es.filter(e => !e.dir && isAudio(e.name)).map(e => e.name).sort(nat).forEach(n => out.push(join(path, n)));
+    if (deep) for (const d of es.filter(e => e.dir).map(e => e.name).sort(nat)) { if (out.length >= 3000) break; await collect(join(path, d), true, out); }
+    return out;
+  }
+  async function readPlaylist(path) {
+    const text = (await Platform.files.read(path)).text, dir = dirOf(path), out = [];
+    for (let line of text.split(/\r?\n/)) {
+      line = line.trim().replace(/\\/g, '/');
+      if (!line || line[0] === '#' || !isAudio(line)) continue;
+      const parts = [];   // "/x/y" counts from the card root, anything else from the playlist's folder
+      for (const s of (line[0] === '/' ? line : join(dir, line)).split('/')) {
+        if (s === '..') parts.pop(); else if (s && s !== '.') parts.push(s);
+      }
+      out.push(parts.join('/'));
+    }
+    return out;
+  }
+  async function loadRows() {
+    try {
+      const es = (await entries(cwd)).filter(e => e.dir || isAudio(e.name) || isList(e.name));
+      const dirs = es.filter(e => e.dir).sort((x, y) => nat(x.name, y.name));
+      const files = es.filter(e => !e.dir).sort((x, y) => nat(x.name, y.name));
+      rows = (cwd ? [{up: true}] : []).concat(dirs.map(e => ({name: e.name, dir: true})), files.map(e => ({name: e.name, list: isList(e.name)})));
+    } catch (e) { say(e.message); rows = cwd ? [{up: true}] : []; }
+    draw();
+  }
+
+  // ---- the queue and the sound ----------------------------------------------------------------
+  function startQueue(paths, at, resume) {
+    if (!paths.length) return say(T('Nothing to play'));
+    queue = paths; fails = 0; qsel = at || 0; playAt(qsel, resume);
+  }
+  function playAt(i, resume) {
+    if (i < 0 || i >= queue.length) return;
+    qi = i; qsel = i;
+    a.src = Platform.files.audioUrl(queue[i]);
+    if (resume > 0) a.addEventListener('loadedmetadata', () => { a.currentTime = resume; }, {once: true});   // continue from the saved place
+    a.play().catch(e => { if (e.name !== 'AbortError' && e.name !== 'NotAllowedError') say(T('Cannot play') + ': ' + base(queue[i])); });
+    saveState(true, resume || 0);
+    draw();
+  }
+  // where we are is remembered (the queue, the track, the time, the order, the folder) and picked up at the next start
+  let lastSave = 0;
+  function saveState(force, time) {
+    if (qi < 0 && !force) return Promise.resolve();
+    const now = Date.now(); if (!force && now - lastSave < 4000) return Promise.resolve();
+    lastSave = now;
+    const t = time !== undefined ? time : (isFinite(a.duration) && a.duration - a.currentTime < 3) ? 0 : a.currentTime;
+    return Platform.state.set({queue, qi, time: t, order, view, cwd}).catch(() => {});
+  }
+  Platform.onClose(() => saveState(true));
+  function next(auto) {
+    if (!queue.length) return;
+    if (order === 3 && queue.length > 1) { let n; do { n = Math.floor(Math.random() * queue.length); } while (n === qi); return playAt(n); }
+    if (qi + 1 < queue.length) return playAt(qi + 1);
+    if (order === 1 || (!auto && order !== 0)) return playAt(0);
+    if (!auto) return;
+    a.pause(); a.currentTime = 0; draw();   // the end of the queue
+  }
+  function prev() {
+    if (!queue.length) return;
+    if (a.currentTime > 3 || qi <= 0) { a.currentTime = 0; return; }
+    playAt(qi - 1);
+  }
+  function toggle() {
+    if (qi < 0) return;
+    if (a.paused) a.play().catch(() => {}); else a.pause();
+  }
+  function stop() {
+    if (qi < 0) return;
+    a.pause(); a.currentTime = 0; drawTime();
+  }
+  function seek(sec) {
+    if (qi < 0 || !isFinite(a.duration)) return;
+    a.currentTime = Math.min(a.duration, Math.max(0, a.currentTime + sec));
+  }
+  a.addEventListener('ended', () => { if (order === 2) { a.currentTime = 0; a.play().catch(() => {}); } else next(true); });
+  a.addEventListener('error', () => {
+    if (qi < 0) return;
+    say(T('Cannot play') + ': ' + base(queue[qi]));
+    if (++fails >= queue.length) { a.pause(); return; }   // none of them plays: do not go round for ever
+    setTimeout(() => next(true), 800);
+  });
+  a.addEventListener('playing', () => { fails = 0; });
+  for (const ev of ['timeupdate', 'durationchange']) a.addEventListener(ev, drawTime);
+  for (const ev of ['play', 'pause']) a.addEventListener(ev, draw);   // the queue row shows the state too
+  a.addEventListener('timeupdate', () => saveState(false));
+  a.addEventListener('pause', () => saveState(true));
+
+  async function savePlaylist() {
+    if (!queue.length) return say(T('The queue is empty'));
+    const d = new Date(), p2 = n => String(n).padStart(2, '0');
+    const name = `Playlist-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.m3u`;
+    try {
+      await Platform.files.mkdir('Playlists').catch(e => { if (e.status !== 409) throw e; });
+      await Platform.files.write('Playlists/' + name, '#EXTM3U\n' + queue.map(p => '/' + p).join('\n') + '\n', {create: true});
+      say(T('Saved') + ': Playlists/' + name);
+    } catch (e) { say(e.message); }
+  }
+
+  // ---- drawing --------------------------------------------------------------------------------
+  const svg = d => '<svg viewBox="0 0 24 24"><path d="' + d + '"/></svg>';
+  const ICON = {
+    play: svg('M8 5v14l11-7z'),
+    pause: svg('M6 5h4v14H6zM14 5h4v14h-4z'),
+    stop: svg('M6 6h12v12H6z'),
+    prev: svg('M6 6h2v12H6zM20 6v12L9.5 12z'),
+    next: svg('M16 6h2v12h-2zM4 6v12l10.5-6z'),
+    rew: svg('M11 18V6l-8.5 6zm.5-6l8.5 6V6z'),
+    ffw: svg('M4 18l8.5-6L4 6zm9-12v12l8.5-6z'),
+    cover: svg('M12 3v10.55A4 4 0 1 0 14 17V7h4V3z'),
+    order: [
+      svg('M4 11h12l-4-4 1.4-1.4L20 12l-6.6 6.4L12 17l4-4H4z'),
+      svg('M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z'),
+      svg('M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2V9h-1l-2 1v1h1.5v4z'),
+      svg('M10.6 9.2L5.4 4 4 5.4l5.2 5.2zM14.5 4l2 2L4 18.6 5.4 20 18 7.5l2 2V4zm.3 9.4l-1.4 1.4 3.1 3.1-2 2H20v-5.5l-2 2z'),
+    ],
+  };
+  function drawTime() {
+    if (view !== 'play' && !$('#mini').classList.contains('on')) return;
+    const d = isFinite(a.duration) ? a.duration : 0;
+    $('#cur').textContent = fmt(a.currentTime); $('#dur').textContent = fmt(d);
+    $('#fill').style.width = d ? Math.min(100, a.currentTime / d * 100) + '%' : '0';
+    $('#state').textContent = qi < 0 ? '' : T(!a.paused ? 'Playing' : a.currentTime < 0.05 ? 'Stopped' : 'Paused');
+    $('#bplay').innerHTML = a.paused ? ICON.play : ICON.pause;
+    $('#mini').textContent = qi < 0 ? '' : (a.paused ? '❚❚ ' : '▶ ') + stem(base(queue[qi])) + '  ' + fmt(a.currentTime) + ' / ' + fmt(d);
+  }
+  function rowEl(cls, name, tag, onclick) {
+    const el = document.createElement('div');
+    el.className = 'row ' + cls;
+    const n = document.createElement('span'), t = document.createElement('span');
+    n.className = 'name'; n.textContent = name; t.className = 'tag'; t.textContent = tag || '';
+    el.append(n, t); el.onclick = onclick;
+    return el;
+  }
+  function draw() {
+    $('#browse').classList.toggle('on', view === 'browse');
+    $('#play').classList.toggle('on', view === 'play');
+    $('#mini').classList.toggle('on', view === 'browse' && qi >= 0);
+    if (view === 'browse') {
+      $('#head').textContent = '/' + cwd;
+      const l = $('#blist'); l.innerHTML = '';
+      rows.forEach((r, i) => {
+        const el = rowEl((r.dir || r.up ? 'dir ' : '') + (r.list ? 'pl ' : '') + (i === sel ? 'sel' : ''),
+          r.up ? '..' : r.dir ? r.name + '/' : r.name, r.list ? 'playlist' : '', () => { sel = i; draw(); activate(); });
+        if (r.dir) {   // play the folder with all its subfolders
+          const b = document.createElement('button');
+          b.className = 'pbtn'; b.title = T('Play folder'); b.innerHTML = ICON.play;
+          b.onclick = e => { e.stopPropagation(); sel = i; playRow(r); };
+          el.appendChild(b);
+        }
+        l.appendChild(el);
+      });
+      if (!rows.length) l.textContent = T('(empty)');
+      const c = l.children[sel]; if (c && c.scrollIntoView) c.scrollIntoView({block: 'nearest'});
+      $('#foot').textContent = '↑↓ select  A open / play  B back';
+    } else {
+      $('#head').textContent = T(ORDERS[order]) + (queue.length ? '  ·  ' + (qi + 1) + ' / ' + queue.length : '');
+      $('#title').textContent = qi < 0 ? T('Nothing playing') : stem(base(queue[qi]));
+      $('#sub').textContent = qi < 0 ? '' : '/' + dirOf(queue[qi]);
+      const l = $('#qlist'); l.innerHTML = '';
+      queue.forEach((p, i) => l.appendChild(rowEl((i === qi ? 'cur ' : '') + (i === qsel ? 'sel' : ''), stem(base(p)), i === qi ? (a.paused ? '❚❚' : '▶') : '',
+        () => { qsel = i; playAt(i); })));
+      const c = l.children[qsel]; if (c && c.scrollIntoView) c.scrollIntoView({block: 'nearest'});
+      $('#border').innerHTML = ICON.order[order];
+      $('#border').classList.toggle('on', order !== 0);
+      $('#border').title = T(ORDERS[order]);
+      for (const id of ['#bprev', '#brew', '#bplay', '#bstop', '#bffw', '#bnext']) $(id).classList.toggle('dis', qi < 0);
+      $('#foot').textContent = '↑↓ select  A play / pause  ←→ seek  B back';
+    }
+    drawTime();
+    drawMenu();
+  }
+  function drawMenu() {
+    $('#menu').classList.toggle('on', !!menu);
+    const b = $('#mbox'); b.innerHTML = '';
+    if (menu) menu.items.forEach((it, i) => b.appendChild(rowEl(i === menu.sel ? 'sel' : '', T(it.label), '', () => { menu.sel = i; runMenu(); })));
+  }
+  function openMenu(items) { menu = {items, sel: 0}; drawMenu(); }
+  function runMenu() { const it = menu.items[menu.sel]; menu = null; drawMenu(); it.run(); }
+
+  // ---- actions --------------------------------------------------------------------------------
+  const pathOf = r => join(cwd, r.name);
+  async function playRow(r) {
+    if (busy) return; busy = true;
+    try {
+      if (r.dir) startQueue(await collect(pathOf(r), true));
+      else if (r.list) startQueue(await readPlaylist(pathOf(r)));
+      else {
+        const all = await collect(cwd, false), at = Math.max(0, all.indexOf(pathOf(r)));
+        startQueue(all, at);
+      }
+      if (qi >= 0) { view = 'play'; draw(); }
+    } catch (e) { say(e.message); }
+    busy = false;
+  }
+  async function addRow(r) {
+    if (busy) return; busy = true;
+    try {
+      const add = r.dir ? await collect(pathOf(r), true) : r.list ? await readPlaylist(pathOf(r)) : [pathOf(r)];
+      queue = queue.concat(add);
+      say(T('Added') + ': ' + add.length);
+      draw(); saveState(true);
+    } catch (e) { say(e.message); }
+    busy = false;
+  }
+  async function playFolder() {
+    if (busy) return; busy = true;
+    try {
+      const r = rows[sel];
+      startQueue(await collect(r && r.dir ? pathOf(r) : cwd, true));
+      if (qi >= 0) { view = 'play'; draw(); }
+    } catch (e) { say(e.message); }
+    busy = false;
+  }
+  function activate() {
+    const r = rows[sel]; if (!r) return;
+    if (r.up) return up();
+    if (r.dir) { cwd = pathOf(r); sel = 0; return loadRows(); }
+    playRow(r);
+  }
+  function up() {
+    if (!cwd) return Platform.exit();
+    const name = base(cwd); cwd = dirOf(cwd);
+    loadRows().then(() => { const i = rows.findIndex(r => r.name === name); sel = i < 0 ? 0 : i; draw(); });
+  }
+  function browseMenu() {
+    const r = rows[sel]; if (!r || r.up) return;
+    openMenu([
+      {label: r.dir ? 'Play folder' : r.list ? 'Play playlist' : 'Play', run: () => playRow(r)},
+      {label: r.dir ? 'Add folder to queue' : 'Add to queue', run: () => addRow(r)},
+    ]);
+  }
+  function playMenu() {
+    openMenu([
+      {label: 'Stop', run: stop},
+      {label: 'Save queue as playlist', run: savePlaylist},
+      {label: 'Remove selected', run: () => {
+        if (!queue.length) return;
+        queue.splice(qsel, 1);
+        if (qsel < qi) qi--; else if (qsel === qi) { qi = -1; a.pause(); a.removeAttribute('src'); if (queue.length) playAt(Math.min(qsel, queue.length - 1)); }
+        qsel = Math.min(qsel, Math.max(0, queue.length - 1)); draw(); saveState(true);
+      }},
+      {label: 'Clear queue', run: () => { queue = []; qi = -1; qsel = 0; a.pause(); a.removeAttribute('src'); draw(); saveState(true, 0); }},
+    ]);
+  }
+
+  // ---- keys -----------------------------------------------------------------------------------
+  addEventListener('keydown', e => {
+    const k = e.key;
+    if (menu) {
+      if (k === 'ArrowUp') menu.sel = Math.max(0, menu.sel - 1);
+      else if (k === 'ArrowDown') menu.sel = Math.min(menu.items.length - 1, menu.sel + 1);
+      else if (k === 'Enter') { e.preventDefault(); return runMenu(); }
+      else if (k === 'Escape') { e.preventDefault(); menu = null; return draw(); }
+      else return;
+      e.preventDefault(); return drawMenu();
+    }
+    if (view === 'browse') {
+      if (k === 'ArrowUp') sel = Math.max(0, sel - 1);
+      else if (k === 'ArrowDown') sel = Math.min(rows.length - 1, sel + 1);
+      else if (k === 'Enter') { e.preventDefault(); return activate(); }
+      else if (k === 'Escape') { e.preventDefault(); return up(); }
+      else return;
+    } else {
+      if (k === 'ArrowUp') qsel = Math.max(0, qsel - 1);
+      else if (k === 'ArrowDown') qsel = Math.min(queue.length - 1, qsel + 1);
+      else if (k === 'ArrowLeft') seek(-10);
+      else if (k === 'ArrowRight') seek(10);
+      else if (k === 'Enter') { e.preventDefault(); if (qsel === qi) toggle(); else playAt(qsel); return; }
+      else if (k === 'Escape') { e.preventDefault(); view = 'browse'; return draw(); }
+      else return;
+    }
+    e.preventDefault(); draw();
+  });
+
+  // the transport buttons: a tap does the action, rewind / fast forward also scan while held
+  $('#cover').innerHTML = ICON.cover;
+  $('#bprev').innerHTML = ICON.prev; $('#bnext').innerHTML = ICON.next; $('#bstop').innerHTML = ICON.stop;
+  $('#brew').innerHTML = ICON.rew; $('#bffw').innerHTML = ICON.ffw;
+  $('#bprev').onclick = prev; $('#bnext').onclick = () => next(false); $('#bplay').onclick = toggle; $('#bstop').onclick = stop;
+  $('#border').onclick = () => { order = (order + 1) % ORDERS.length; draw(); say(T(ORDERS[order])); saveState(true); };
+  function scanButton(el, dir) {
+    let t = null, iv = null, held = false;
+    const end = () => { clearTimeout(t); clearInterval(iv); t = iv = null; el.classList.remove('hold'); };
+    el.addEventListener('pointerdown', () => {
+      held = false;
+      t = setTimeout(() => { held = true; el.classList.add('hold'); iv = setInterval(() => seek(dir * 4), 150); }, 400);
+    });
+    el.addEventListener('pointerup', () => { if (t === null) return; const was = held; end(); if (!was) seek(dir * 10); });
+    el.addEventListener('pointerleave', end); el.addEventListener('pointercancel', end);
+  }
+  scanButton($('#brew'), -1); scanButton($('#bffw'), 1);
+
+  // touch: tap the progress bar to seek
+  $('#bar').addEventListener('click', e => {
+    if (!isFinite(a.duration)) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    a.currentTime = a.duration * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  });
+  // drag to scroll the lists with the touchscreen
+  for (const l of document.querySelectorAll('.list')) {
+    let d = null, dragged = false;
+    l.addEventListener('pointerdown', e => { d = {y: e.clientY, st: l.scrollTop}; dragged = false; });
+    l.addEventListener('pointermove', e => { if (!d) return; const dy = e.clientY - d.y; if (!dragged && Math.abs(dy) > 8) { dragged = true; l.setPointerCapture(e.pointerId); } if (dragged) l.scrollTop = d.st - dy; });
+    l.addEventListener('pointerup', () => { d = null; }); l.addEventListener('pointercancel', () => { d = null; });
+    l.addEventListener('click', e => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+  }
+
+  (async () => {
+    const arg = await Platform.launchArg().catch(() => null);   // started by the file manager with a file
+    let st = null;   // where the last run stopped
+    try { st = await Platform.state.get(); if (!st) st = JSON.parse(await Platform.db.get('state')); } catch (e) {}   // the older key, once
+    if (st && st.order >= 0 && st.order < ORDERS.length) order = st.order;
+    if (arg && arg.open) {
+      const p = arg.open;
+      cwd = dirOf(p);
+      try {
+        const same = st && Array.isArray(st.queue) && st.queue[st.qi] === p;   // the file that was playing: go on from the saved time
+        if (isList(p)) startQueue(await readPlaylist(p));
+        else { const all = await collect(cwd, false); startQueue(all, Math.max(0, all.indexOf(p)), same ? st.time : 0); }
+        if (qi >= 0) view = 'play';
+      } catch (e) { say(e.message); }
+    } else if (st) {
+      if (typeof st.cwd === 'string' && st.cwd) { try { await entries(st.cwd); cwd = st.cwd; } catch (e) {} }
+      if (Array.isArray(st.queue) && st.queue.length && st.qi >= 0 && st.qi < st.queue.length) {
+        startQueue(st.queue, st.qi, st.time);
+        view = st.view === 'play' ? 'play' : 'browse';
+      }
+    }
+    await loadRows();
+  })();
+  // Caroline's tools for this page (manifest: "caroline"): what plays, and the transport
+  const nowPlaying = () => qi < 0 ? 'Nothing is playing.' : (a.paused ? 'Paused' : 'Playing') + ': ' + queue[qi] + ' (' + fmt(a.currentTime) + ' of ' + fmt(a.duration) + '), track ' + (qi + 1) + ' of ' + queue.length + ', order: ' + ORDERS[order];
+  const settled = () => new Promise(r => setTimeout(r, 1200));
+  Platform.tools.handle('now_playing', async () => nowPlaying());
+  Platform.tools.handle('play', async args => {
+    const p = String(args.path || '').replace(/^\/+/, '');
+    let list, at = 0, isDir = false;
+    if (isList(p)) list = await readPlaylist(p);
+    else {
+      try { await entries(p); isDir = true; } catch (e) { /* a file */ }
+      if (isDir) list = await collect(p, true);
+      else { list = await collect(dirOf(p), false); at = Math.max(0, list.indexOf(p)); }
+    }
+    if (!list.length) throw new Error('no audio files at ' + p);
+    startQueue(list, at); view = 'play'; draw();
+    await settled();
+    return a.paused ? 'Queued, but the sound did not start (' + nowPlaying() + ')' : nowPlaying();
+  });
+  Platform.tools.handle('pause', async () => { a.pause(); return nowPlaying(); });
+  Platform.tools.handle('resume', async () => { if (qi >= 0) await a.play().catch(() => {}); await settled(); return nowPlaying(); });
+  Platform.tools.handle('next', async () => { next(false); await settled(); return nowPlaying(); });
+  Platform.tools.handle('previous', async () => { prev(); await settled(); return nowPlaying(); });
+  Platform.tools.handle('stop', async () => { stop(); return nowPlaying(); });
+  Platform.tools.handle('seek', async args => { seek(Number(args.seconds) || 0); return nowPlaying(); });
+
+</script>

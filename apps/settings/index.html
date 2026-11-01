@@ -1,0 +1,476 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Settings</title>
+<meta name="viewport" content="width=640,height=480">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #head { flex: none; height: 40px; line-height: 40px; padding: 0 14px; background: #000; color: #f2a900; font-size: 20px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #list { flex: 1; min-height: 0; overflow: auto; touch-action: none; }
+  .row { height: 54px; padding: 0 14px; display: flex; align-items: center; gap: 12px; font-size: 21px; border-bottom: 1px solid #1d242b; }
+  .row.sel { background: #f2a900; color: #000; }
+  .row .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .val { font-size: 16px; opacity: .7; white-space: nowrap; }
+  .box { flex: none; width: 28px; height: 28px; border-radius: 6px; border: 3px solid currentColor; display: flex; align-items: center; justify-content: center; font-size: 20px; line-height: 1; }
+  .dot { flex: none; width: 24px; height: 24px; border-radius: 50%; border: 3px solid currentColor; display: flex; align-items: center; justify-content: center; }
+  .dot i { display: block; width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
+  .row.off { opacity: .45; }
+  .row .step { flex: none; width: 44px; height: 38px; border-radius: 8px; border: 3px solid currentColor; display: flex; align-items: center; justify-content: center; font-size: 26px; line-height: 1; }
+  #msg { flex: none; min-height: 26px; padding: 0 14px 4px; font-size: 16px; color: #ff6b6b; }
+  /* the link flow of an account: a page over the list */
+  #link { position: fixed; inset: 0; background: #111; display: none; flex-direction: column; padding: 12px 18px; gap: 10px; z-index: 10; }
+  #link.on { display: flex; }
+  #link h2 { margin: 0; font-size: 22px; color: #f2a900; }
+  #lp { font-size: 16px; opacity: .75; min-height: 22px; }
+  #lerr { font-size: 16px; color: #ff6b6b; min-height: 22px; }
+  #lf { display: flex; flex-direction: column; gap: 6px; overflow: auto; -webkit-user-select: text; user-select: text; }
+  #lf label { font-size: 14px; opacity: .7; }
+  #lf input { height: 42px; border: 0; border-radius: 8px; padding: 0 12px; font: 19px "DejaVu Sans", sans-serif; background: #fff; color: #000; outline: 0; }
+  #lf input:focus { outline: 3px solid #f2a900; }
+  #qrimg { display: none; align-self: center; background: #fff; padding: 10px; border-radius: 6px; width: 220px; height: 220px; object-fit: contain; }
+  #lbtn { display: flex; gap: 8px; margin-top: auto; }
+  #lbtn span { flex: 1; height: 42px; line-height: 42px; text-align: center; font-size: 18px; border-radius: 8px; border: 3px solid #f2a900; }
+  #lbtn span.on { background: #f2a900; color: #000; }
+</style>
+<div id="head"></div>
+<div id="list"></div>
+<div id="msg"></div>
+<div id="link">
+  <h2 id="lt"></h2>
+  <div id="lp"></div>
+  <img id="qrimg" alt="">
+  <div id="lf"></div>
+  <div id="lerr"></div>
+  <div id="lbtn"><span role="button" id="lcancel">Cancel</span><span role="button" class="on" id="lok">Continue</span></div>
+</div>
+<script src="/platform.js"></script>
+<script>
+  const $ = s => document.querySelector(s);
+  let langs = [], cur = {language: 'en', layouts: ['en']};
+  let screen = 'root', sel = 0, rows = [], trail = [];
+  let clk = null, zones = [], region = '', edit = null;
+  let ags = null, journal = [], agentKey = '';
+  let about = null;   // GET /api/about: {version, build, hardware}   // the agents the apps publish (read only: the owner looks, nothing is switched here)
+  const AGENT_SCREENS = ['agents', 'agent', 'journal'];
+  const ACCOUNT_SCREENS = ['accounts', 'account', 'addrole', 'addsvc'];
+  const TITLES = {root: 'Settings', lang: 'Language', layouts: 'Keyboard layouts', dt: 'Date & time', edit: 'Set date and time', zreg: 'Time zone', zcity: 'Time zone', agents: 'Agents', agent: 'Agent', journal: 'Journal of the agents', about: 'About',
+                  accounts: 'Accounts', account: 'Account', addrole: 'Add account', addsvc: 'Add account'};
+  // ---- Assistant: the assistant of this build of OS Beroun (docs/assistant-contract.md): its name, and its own settings ----
+  let slot = null;   // GET /api/assistant/providers: {active, providers: [{id, name, installed, active}]}
+  async function loadSlot() { try { slot = await (await fetch('/api/assistant/providers')).json(); } catch (e) { slot = null; } }
+  const activeName = () => ((slot && slot.providers.find(p => p.active)) || {name: 'Caroline'}).name;
+  // ---- Accounts: the mail and messenger accounts that Communicator and Caroline share (Communicator's backend, /api/msg) ----
+  let accts = [], acct = null, addRole = 'owner', L = null, qrTimer = null, linkPoll = null;
+  const SERVICES = {mail: 'Mail', whatsapp: 'WhatsApp', telegram: 'Telegram', signal: 'Signal', slack: 'Slack'};
+  const roleName = role => role === 'owner' ? 'Me' : activeName();   // the role "self": the accounts of the assistant in the slot (its name, not always Caroline's)
+  const STATE_TEXT = {linked: 'linked', connecting: 'linking...', 'needs-attention': 'needs attention', 'not-linked': 'not linked', unavailable: 'not available yet'};
+  async function msgApi(path, method, body) {
+    const r = await fetch('/api/msg/' + path, method ? {method, body: JSON.stringify(body || {})} : undefined), j = await r.json().catch(() => ({error: 'bad answer'}));
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    return j;
+  }
+  async function loadAccounts() {
+    try { accts = (await msgApi('accounts')).accounts; } catch (e) { accts = []; $('#msg').textContent = Platform.t(e.message); }
+    if (acct) acct = accts.find(a => a.id === acct.id) || null;
+  }
+  const shown = a => a.state !== 'not-linked' && a.state !== 'unavailable';   // the list holds the accounts that exist; an empty place of a service is only offered by Add
+  const accName = a => a.label + (a.slot > 1 || (a.detail && a.state === 'linked') ? ' · ' + (a.state === 'linked' && a.detail ? a.detail : '#' + a.slot) : '');
+  async function loadAgents() {
+    try { ags = await (await fetch('/api/agents/summary')).json(); if (!ags.agents) ags = null; } catch (e) { ags = null; }
+    if (!slot) await loadSlot();
+    if (screen === 'journal') { try { journal = (await (await fetch('/api/agents/journal?limit=60')).json()).reverse(); } catch (e) { journal = []; } }
+  }
+  const clock = t => { const d = new Date(t * 1000); return p2(d.getHours()) + ':' + p2(d.getMinutes()); };
+  const money = x => (Math.round(x * 100) / 100).toFixed(2);
+  const ROOT_OF = {lang: 0, layouts: 1, dt: 2};
+
+  const nameOf = code => (langs.find(l => l.code === code) || {name: code}).name;
+  const p2 = n => String(n).padStart(2, '0');
+  const dateOf = l => l.year + '-' + p2(l.month) + '-' + p2(l.day);
+  const timeOf = l => p2(l.hour) + ':' + p2(l.minute);
+  const pretty = z => z.replace(/_/g, ' ');
+  const regions = () => [...new Set(zones.map(z => z.split('/')[0]))];
+  const daysIn = (y, m) => new Date(y, m, 0).getDate();
+  const FIELDS = [['year', 'Year', 2000, 2099], ['month', 'Month', 1, 12], ['day', 'Day', 1, 31], ['hour', 'Hour', 0, 23], ['minute', 'Minute', 0, 59]];
+
+  async function loadClock() { try { clk = await Platform.time.status(); } catch (e) { clk = null; } }
+
+  function go(to, newSel) { trail.push({screen, sel}); screen = to; sel = newSel; $('#msg').textContent = ''; render(); }
+
+  function bump(f, dir) {  // one step of a field of the date/time editor; the day follows the length of the month
+    const [k, , lo, hi] = FIELDS.find(x => x[0] === f);
+    edit[k] = edit[k] + dir > hi ? lo : edit[k] + dir < lo ? hi : edit[k] + dir;
+    edit.day = Math.min(edit.day, daysIn(edit.year, edit.month));
+    render();
+  }
+
+  function render() {
+    const list = $('#list'); list.innerHTML = '';
+    $('#head').textContent = Platform.t(TITLES[screen]);
+    rows = [];
+    const l = clk && clk.local;
+    if (screen === 'root') {
+      rows = [{k: 'lang', name: 'Language', val: nameOf(cur.language)}, {k: 'layouts', name: 'Keyboard layouts', val: String(cur.layouts.length)},
+              {k: 'dt', name: 'Date & time', val: l ? timeOf(l) : ''}, {k: 'accounts', name: 'Accounts', val: accts.filter(shown).length ? String(accts.filter(shown).length) : ''},
+              {k: 'dnd', name: 'Do not disturb', check: !!cur.dnd},
+              {k: 'autoupd', name: 'Update apps automatically', check: !!cur.auto_update}, {k: 'caroline', name: 'Assistant', val: activeName(), tr: false}];
+      if (ags && ags.agents.length) rows.push({k: 'agents', name: 'Agents', val: String(ags.agents.length)});
+      rows.push({k: 'about', name: 'About'});   // the last item
+    } else if (screen === 'accounts') {
+      rows = accts.filter(shown).map(a => ({k: a.id, name: accName(a), val: Platform.t(roleName(a.role)) + ', ' + Platform.t(STATE_TEXT[a.state] || a.state), acc: true}))
+        .concat([{k: 'add', name: 'Add account', tl: true}]);
+    } else if (screen === 'account') {
+      const a = acct;
+      rows = !a ? [] : [{name: accName(a), val: Platform.t(roleName(a.role)), info: true, acc: true},
+                        {name: 'Status', tl: true, val: Platform.t(STATE_TEXT[a.state] || a.state) + (a.detail && a.state !== 'linked' ? ': ' + a.detail : ''), info: true}]
+        .concat([{k: 'edit', name: a.state === 'linked' ? 'Edit' : 'Link again', tl: true}, {k: 'delete', name: 'Delete', tl: true}]);
+    } else if (screen === 'addrole') {
+      rows = [{k: 'owner', name: 'My account', tl: true}, {k: 'self', name: activeName() + "'s own account", tl: true}];
+    } else if (screen === 'addsvc') {
+      rows = Object.entries(SERVICES).map(([svc, label]) => {
+        const mine = accts.filter(a => a.service === svc && a.role === addRole);
+        const free = mine.some(a => a.state === 'not-linked'), multi = mine.some(a => a.multi), na = mine.length && mine.every(a => a.state === 'unavailable');
+        return {k: svc, name: label, val: na ? Platform.t('not available yet') : free || multi ? '' : Platform.t('one account'), off: na || !(free || multi)};
+      });
+    } else if (screen === 'about') {
+      rows = about ? [{name: 'Software version', val: about.version, info: true}, {name: 'Build', val: about.build, info: true}, {name: 'Hardware', val: about.hardware, info: true}] : [];
+    } else if (screen === 'agents') {
+      rows = ags ? ags.agents.map(a => ({k: a.key, name: (a.app_name || a.app) + ' / ' + a.id, val: a.spent ? money(a.spent) : ''})).concat([{k: 'journal', name: 'Journal', tl: true, val: ags.calls ? String(ags.calls) : ''}]) : [];
+    } else if (screen === 'agent') {
+      const a = ags && ags.agents.find(x => x.key === agentKey);
+      const n = s => a.tasks[s] || 0, live = n('submitted') + n('working') + n('input-required');
+      rows = !a ? [] : [{name: a.description || a.id, info: true}]
+        .concat([{name: 'Runs', tl: true, val: a.where === 'a2a' ? (a.remote && a.remote.status === 'ok' ? 'remote (A2A)' : 'remote (A2A), not reachable') : 'on the device', info: true}])
+        .concat(a.skills.map(s => ({name: s.name, val: [s.long ? 'long' : '', s.confirm ? 'outside its app' : ''].filter(Boolean).join(', '), info: true})))
+        .concat([{name: 'Camerlengo', tl: true, val: a.camerlengo.join(' ') || '-', info: true}, {name: 'Permissions', tl: true, val: a.permissions.join(' ') || '-', info: true},
+                 {name: 'Tasks', tl: true, val: live + ' running, ' + n('completed') + ' done, ' + (n('failed') + n('canceled')) + ' failed', info: true},
+                 {name: 'Calls', tl: true, val: a.calls + (a.refused || a.failed ? ' (' + a.refused + ' refused, ' + a.failed + ' failed)' : ''), info: true},
+                 {name: 'Spent', tl: true, val: money(a.spent), info: true}]);
+    } else if (screen === 'journal') {
+      rows = journal.map(x => ({name: clock(x.t) + ' ' + x.agent + ' ' + (x.event === 'sw' ? x.command : x.skill + ' ' + x.event), val: x.event === 'sw' ? x.outcome : (x.state || ''), info: true}));
+    } else if (screen === 'lang') {
+      rows = langs.map(x => ({k: x.code, name: x.name, radio: x.code === cur.language}));
+    } else if (screen === 'layouts') {
+      rows = langs.map(x => ({k: x.code, name: x.name, check: cur.layouts.includes(x.code)}));
+    } else if (screen === 'dt') {
+      const auto = clk && clk.ntp;
+      rows = [{k: 'ntp', name: 'Automatic date and time', check: !!auto, val: !auto ? '' : clk.synced ? Platform.t('synchronized') : Platform.t('waiting for the network'), tr: true},
+              {k: 'date', name: 'Date', val: l ? dateOf(l) : '', off: auto}, {k: 'time', name: 'Time', val: l ? timeOf(l) : '', off: auto},
+              {k: 'zone', name: 'Time zone', val: clk ? pretty(clk.zone) : ''}];
+    } else if (screen === 'edit') {
+      rows = FIELDS.map(([k, name]) => ({k, name, step: true, val: String(k === 'year' ? edit[k] : p2(edit[k]))})).concat([{k: 'apply', name: 'Set'}]);
+    } else if (screen === 'zreg') {
+      rows = regions().map(r => ({k: r, name: r, radio: !!clk && clk.zone.split('/')[0] === r}));
+    } else {
+      rows = zones.filter(z => z.split('/')[0] === region).map(z => ({k: z, name: pretty(z.split('/').slice(1).join('/')) || 'UTC', radio: !!clk && z === clk.zone}));
+    }
+    sel = Math.max(0, Math.min(sel, rows.length - 1));
+    rows.forEach((r, i) => {
+      const d = document.createElement('div'); d.className = 'row' + (i === sel ? ' sel' : '') + (r.off ? ' off' : '');
+      if (r.check !== undefined) { const b = document.createElement('span'); b.className = 'box'; b.textContent = r.check ? '✓' : ''; d.appendChild(b); }
+      if (r.radio !== undefined) { const b = document.createElement('span'); b.className = 'dot'; if (r.radio) b.appendChild(document.createElement('i')); d.appendChild(b); }
+      const n = document.createElement('span'); n.className = 'name'; n.textContent = r.name;
+      // a language and a place are shown in their own names: they are not translated
+      if (['lang', 'layouts', 'zreg', 'zcity'].includes(screen) || ((AGENT_SCREENS.includes(screen) || ACCOUNT_SCREENS.includes(screen)) && !r.tl)) n.setAttribute('translate', 'no');
+      if (screen === 'addsvc') n.setAttribute('translate', 'no');   // a service is shown by its own name
+      d.appendChild(n);
+      if (r.step) {  // - value +: for a touchscreen; the D-pad uses left and right
+        const mk = (txt, dir) => {
+          const b = document.createElement('span'); b.className = 'step'; b.textContent = txt;
+          let t = null; const stop = () => { clearTimeout(t); clearInterval(t); t = null; };
+          b.addEventListener('pointerdown', e => { e.stopPropagation(); sel = i; bump(r.k, dir); stop(); t = setTimeout(() => { t = setInterval(() => bump(r.k, dir), 90); }, 450); });
+          ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, stop));
+          b.onclick = e => e.stopPropagation();
+          return b;
+        };
+        d.appendChild(mk('−', -1));
+        const v = document.createElement('span'); v.className = 'val'; v.style.cssText = 'min-width:56px;text-align:center;font-size:21px;opacity:1'; v.textContent = r.val; v.setAttribute('translate', 'no'); d.appendChild(v);
+        d.appendChild(mk('+', 1));
+      } else if (r.val) { const v = document.createElement('span'); v.className = 'val'; v.textContent = r.val; if (!r.tr) v.setAttribute('translate', 'no'); d.appendChild(v); }
+      d.onclick = () => { sel = i; open(); }; d.setAttribute('role', 'button');
+      list.appendChild(d);
+    });
+    const c = list.children[sel]; if (c && c.scrollIntoView) c.scrollIntoView({block: 'nearest'});
+  }
+
+  async function open() {
+    const r = rows[sel]; if (!r) return;
+    $('#msg').textContent = '';
+    if (screen === 'root' && r.k === 'caroline') {  // the assistant of this build (the build chooses it, never the user): its own settings (Caroline: her panel, in her layer; Claude, Codex: the account)
+      try { const res = await fetch('/api/assistant/settings', {method: 'POST', body: '{}'}); if (!res.ok) $('#msg').textContent = Platform.t((await res.json().catch(() => ({}))).error || 'Sign in first'); }
+      catch (e) { $('#msg').textContent = e.message; }
+      return;
+    }
+    if (screen === 'root' && r.k === 'dnd') {  // the launcher's notification panel: texts come without sound and vibration
+      try { cur.dnd = (await Platform.notifications.dnd(!cur.dnd)).dnd; } catch (e) { $('#msg').textContent = Platform.t(e.message); }
+      render(); return;
+    }
+    if (screen === 'root' && r.k === 'autoupd') {  // the Store's updates install themselves (an update asking for more rights still waits for the owner)
+      try { await Platform.settings.set('auto_update', !cur.auto_update); cur.auto_update = !cur.auto_update; } catch (e) { $('#msg').textContent = Platform.t(e.message); }
+      render(); return;
+    }
+    if (screen === 'root' && r.k === 'accounts') { await loadAccounts(); go('accounts', 0); return; }
+    if (screen === 'accounts') {
+      if (r.k === 'add') { go('addrole', 0); return; }
+      acct = accts.find(a => a.id === r.k) || null; if (acct) go('account', 2); return;
+    }
+    if (screen === 'account') {
+      if (!acct || !r.k) return;
+      if (r.k === 'edit') { await startLink(acct, {edit: acct.state === 'linked'}); return; }
+      if (r.k === 'delete') await deleteAccount(acct);
+      return;
+    }
+    if (screen === 'addrole') { addRole = r.k; go('addsvc', 0); return; }
+    if (screen === 'addsvc') {
+      if (r.off) { $('#msg').textContent = Platform.t(r.val || 'not available yet'); return; }
+      try { const a = (await msgApi('accounts', 'POST', {service: r.k, role: addRole})).account; await loadAccounts(); await startLink(a, {}); }
+      catch (e) { $('#msg').textContent = Platform.t(e.message); }
+      return;
+    }
+    if (screen === 'root' && r.k === 'agents') { await loadAgents(); go('agents', 0); return; }
+    if (screen === 'root' && r.k === 'about') {
+      try { about = await (await fetch('/api/about')).json(); } catch (e) { about = null; }
+      go('about', 0); return;
+    }
+    if (screen === 'about') return;   // only to look at
+    if (screen === 'agents') { agentKey = r.k; const to = r.k === 'journal' ? 'journal' : 'agent'; screen = to; await loadAgents(); screen = 'agents'; go(to, 0); return; }
+    if (screen === 'agent' || screen === 'journal') return;   // only to look at
+    if (screen === 'root') {
+      if (r.k === 'dt') await loadClock();
+      go(r.k, r.k === 'lang' ? Math.max(0, langs.findIndex(l => l.code === cur.language)) : 0); return;
+    }
+    if (screen === 'dt') { await openClock(r); return; }
+    if (screen === 'edit') {
+      if (r.k !== 'apply') return;
+      try { clk = await Platform.time.set({year: edit.year, month: edit.month, day: edit.day, hour: edit.hour, minute: edit.minute}); back(); }
+      catch (e) { $('#msg').textContent = Platform.t(e.message); }
+      return;
+    }
+    if (screen === 'zreg') {
+      if (r.k === 'UTC') { await setZone('UTC'); return; }
+      region = r.k; go('zcity', Math.max(0, zones.filter(z => z.split('/')[0] === r.k).indexOf(clk && clk.zone))); return;
+    }
+    if (screen === 'zcity') { await setZone(r.k); return; }
+    if (screen === 'lang') {
+      if (r.k === cur.language) return;
+      await Platform.settings.set('language', r.k);
+      location.reload();  // the whole page changes language
+      return;
+    }
+    // layouts: a switch each; at least one stays on
+    const on = cur.layouts.includes(r.k);
+    let next = on ? cur.layouts.filter(x => x !== r.k) : cur.layouts.concat([r.k]);
+    if (!next.length) { $('#msg').textContent = Platform.t('Keep at least one layout'); return; }
+    next = langs.map(l => l.code).filter(c => next.includes(c));  // keep the list order
+    try { await Platform.settings.set('layouts', next); cur.layouts = next; } catch (e) { $('#msg').textContent = e.message; }
+    render();
+  }
+
+  async function openClock(r) {
+    try {
+      if (r.k === 'ntp') { clk = await Platform.time.setNtp(!clk.ntp); render(); return; }
+      if (r.k === 'zone') {
+        if (!zones.length) zones = await Platform.time.zones();
+        go('zreg', Math.max(0, regions().indexOf(clk.zone.split('/')[0]))); return;
+      }
+      if (clk.ntp) { $('#msg').textContent = Platform.t('Turn off automatic date and time first'); return; }
+      edit = Object.assign({}, clk.local);
+      go('edit', r.k === 'time' ? 3 : 0);
+    } catch (e) { $('#msg').textContent = Platform.t(e.message); }
+  }
+
+  async function setZone(z) {
+    try {
+      clk = await Platform.time.setZone(z);
+      const i = trail.findIndex(t => t.screen === 'root'); trail = trail.slice(0, i + 1);  // back to the Date & time page, whatever the way here
+      const t = trail.pop(); screen = 'dt'; sel = 3; render(); void t;
+    } catch (e) { $('#msg').textContent = Platform.t(e.message); }
+  }
+
+  // ---- the link flow: steps of the service (qr, code, password, form, open_page, wait, done, error) on a page over the list ----
+  function toAccounts() {
+    const i = trail.findIndex(t => t.screen === 'root'); trail = trail.slice(0, i + 1);
+    screen = 'accounts'; sel = 0; $('#msg').textContent = ''; render();
+  }
+  let linkEdit = false;
+  async function startLink(a, params) {
+    linkEdit = !!(params && params.edit);
+    try { handleStep(a, await msgApi(`accounts/${encodeURIComponent(a.id)}/link/start`, 'POST', params)); }
+    catch (e) { handleStep(a, {step: 'error', error: e.message}); }
+  }
+  function stopLinkTimers() { clearInterval(qrTimer); clearInterval(linkPoll); qrTimer = linkPoll = null; }
+  function handleStep(a, step) {
+    L = {acct: a, step}; stopLinkTimers();
+    $('#link').classList.add('on');
+    $('#lt').textContent = Platform.t(params_title(a));
+    $('#lerr').textContent = step.step === 'error' ? Platform.t(step.error) : '';
+    $('#lp').textContent = step.prompt ? Platform.t(step.prompt) : '';
+    const f = $('#lf'); f.innerHTML = ''; const img = $('#qrimg'); img.style.display = 'none'; $('#lok').style.display = ''; $('#lok').textContent = Platform.t('Continue');
+    if (step.step === 'done') { finishLink(); return; }
+    if (step.step === 'qr') {
+      $('#lp').textContent = Platform.t(step.prompt || 'Scan this code with the phone: Linked devices.'); $('#lok').style.display = 'none';
+      if (step.image) { const load = () => { img.src = '/api/msg/' + step.image + '?t=' + Date.now(); }; img.style.display = 'block'; load(); qrTimer = setInterval(load, 4000); }
+      else $('#lerr').textContent = step.data || '';
+    } else if (step.step === 'form') {
+      step.fields.forEach(x => {
+        const l = document.createElement('label'), i = document.createElement('input');
+        l.textContent = Platform.t(x.label); i.name = x.name; i.type = x.secret ? 'password' : 'text'; i.value = x.preset || ''; i.autocomplete = 'off'; f.append(l, i);
+      });
+    } else if (step.step === 'code' || step.step === 'password') {
+      const l = document.createElement('label'), i = document.createElement('input');
+      l.textContent = Platform.t(step.prompt || (step.step === 'code' ? 'Code' : 'Password')); i.name = step.step; i.type = step.step === 'password' ? 'password' : 'text'; i.autocomplete = 'off'; f.append(l, i);
+      $('#lp').textContent = '';
+    } else if (step.step === 'open_page') {
+      $('#lp').textContent = Platform.t(step.prompt || '') + '  ' + step.url;
+    } else if (step.step === 'error') {
+      L.failed = true; $('#lok').textContent = Platform.t('Try again'); return;
+    }
+    // the service finishes by itself (a scan, a page): the page closes when the account turns linked
+    if (['qr', 'wait', 'open_page'].includes(step.step)) linkPoll = setInterval(async () => {
+      await loadAccounts(); const x = accts.find(y => y.id === a.id); if (x && x.state === 'linked') finishLink();
+    }, 2000);
+    const first = f.querySelector('input'); if (first) setTimeout(() => first.focus(), 50);
+  }
+  const params_title = a => (linkEdit ? 'Edit ' : 'Link ') + a.label + (a.role === 'self' ? ' (' + activeName() + "'s)" : '');
+  async function finishLink() {
+    stopLinkTimers(); L = null; $('#link').classList.remove('on');
+    await loadAccounts(); toAccounts();
+  }
+  async function linkNext() {
+    if (!L) return;
+    if (L.failed) { const a = L.acct; closeLink(false); return startLink(a, {}); }
+    const data = {}; $('#lf').querySelectorAll('input').forEach(i => data[i.name] = i.value);
+    const a = L.acct;
+    try { handleStep(a, await msgApi(`accounts/${encodeURIComponent(a.id)}/link/step`, 'POST', data)); } catch (e) { handleStep(a, {step: 'error', error: e.message}); }
+  }
+  async function closeLink(cancel) {
+    const a = L && L.acct; stopLinkTimers(); L = null; $('#link').classList.remove('on');
+    if (cancel && a) { try { await msgApi(`accounts/${encodeURIComponent(a.id)}/link/cancel`, 'POST', {}); } catch (e) {} await loadAccounts(); if (screen === 'addsvc') toAccounts(); else render(); }
+  }
+  async function deleteAccount(a) {
+    const r = await Platform.messageBox({title: Platform.t('Delete this account?'), icon: 'warning', kind: 'yesno',
+      text: accName(a) + ' ' + Platform.t('will be removed from the device, for Communicator and for ' + activeName() + '. Its stored messages are deleted.')});
+    if (r.index !== 0) return;
+    try { await msgApi(`accounts/${encodeURIComponent(a.id)}/delete`, 'POST'); acct = null; await loadAccounts(); toAccounts(); }
+    catch (e) { $('#msg').textContent = Platform.t(e.message); }
+  }
+  $('#lok').onclick = linkNext; $('#lcancel').onclick = () => closeLink(true);
+  $('#lf').addEventListener('keydown', e => { if (e.key === 'Enter') {   // Enter goes to the next field, and sends the form from the last one
+      e.preventDefault(); e.stopPropagation();
+      const all = [...$('#lf').querySelectorAll('input')], nxt = all[all.indexOf(e.target) + 1];
+      if (nxt) nxt.focus(); else linkNext();
+    } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLink(true); } });
+
+  function back() {
+    if (screen === 'root') return;
+    const t = trail.pop() || {screen: 'root', sel: ROOT_OF[screen] || 0};
+    screen = t.screen; sel = t.sel; $('#msg').textContent = ''; render();
+  }
+
+  addEventListener('keydown', e => {
+    if ($('#link').classList.contains('on')) { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); closeLink(true); } return; }   // the link page has its own keys
+    if (e.key === 'ArrowUp') sel = Math.max(0, sel - 1);
+    else if (e.key === 'ArrowDown') sel = Math.min(rows.length - 1, sel + 1);
+    else if (screen === 'edit' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && rows[sel] && rows[sel].step) { e.preventDefault(); bump(rows[sel].k, e.key === 'ArrowRight' ? 1 : -1); return; }
+    else if (e.key === 'Enter') { e.preventDefault(); open(); return; }
+    else if (e.key === 'Escape') { back(); return; }
+    else return;
+    e.preventDefault(); render();
+  });
+
+  // drag to scroll the list with the touchscreen
+  (() => {
+    const l = $('#list'); let d = null, dragged = false;
+    l.addEventListener('pointerdown', e => { d = {y: e.clientY, st: l.scrollTop}; dragged = false; });
+    l.addEventListener('pointermove', e => { if (!d) return; const dy = e.clientY - d.y; if (!dragged && Math.abs(dy) > 8) { dragged = true; l.setPointerCapture(e.pointerId); } if (dragged) l.scrollTop = d.st - dy; });
+    l.addEventListener('pointerup', () => { d = null; }); l.addEventListener('pointercancel', () => { d = null; });
+    l.addEventListener('click', e => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+  })();
+
+  (async () => {
+    langs = await (await fetch('/i18n/languages.json')).json();
+    const s = await Platform.settings.get();
+    cur = {language: s.language || 'en', layouts: s.layouts || ['en'], dnd: !!s.dnd, auto_update: s.auto_update !== false};
+    // somebody else (Caroline, the launcher's panel) switched do-not-disturb: the row follows
+    Platform.notifications.on(m => { if (m.event === 'dnd' && !!m.dnd !== cur.dnd) { cur.dnd = !!m.dnd; if (screen === 'root') render(); } });
+    // back at the same place as when it was closed (the app shares its window with the others)
+    const st = await Platform.state.get().catch(() => null);
+    await loadClock();
+    await loadAgents();
+    await loadAccounts();
+    await loadSlot();
+    if (st && ['root', 'lang', 'layouts', 'dt'].includes(st.screen)) {
+      screen = st.screen; sel = Number.isInteger(st.sel) && st.sel >= 0 ? st.sel : 0;
+      if (screen !== 'root') trail = [{screen: 'root', sel: ROOT_OF[screen]}];
+    }
+    const la = await Platform.launchArg().catch(() => null);   // Communicator sends the owner here to add or change an account
+    if (la && la.screen === 'accounts') { screen = 'accounts'; sel = 0; trail = [{screen: 'root', sel: 3}]; }
+    render();
+    setInterval(async () => { if (screen === 'root' || screen === 'dt') { await loadClock(); render(); } }, 15000);
+    setInterval(async () => { if (AGENT_SCREENS.includes(screen)) { await loadAgents(); render(); } }, 5000);   // a task or a call of an agent shows up while the page is open
+  })();
+  // a deeper page (the editor, the zone lists) is saved as the Date & time page it came from
+  Platform.onClose(() => Platform.state.set(['edit', 'zreg', 'zcity'].includes(screen) ? {screen: 'dt', sel: 0} : AGENT_SCREENS.includes(screen) ? {screen: 'root', sel: 7} : ACCOUNT_SCREENS.includes(screen) ? {screen: 'root', sel: 3} : {screen, sel}));
+  // Caroline's tools for this page (manifest: "caroline"): the system settings the page edits
+  Platform.tools.handle('get_settings', async () => {
+    const s = await Platform.settings.get();
+    await loadClock();
+    const c = clk ? '\nDate: ' + dateOf(clk.local) + '\nTime: ' + timeOf(clk.local) + '\nTime zone: ' + clk.zone + '\nAutomatic date and time (NTP): ' + (clk.ntp ? 'on, ' + (clk.synced ? 'synchronized' : 'waiting for the network') : 'off') : '';
+    return 'Language: ' + s.language + ' (' + nameOf(s.language) + ')\nKeyboard layouts: ' + (s.layouts || []).join(', ') + c + '\nAvailable: ' + langs.map(l => l.code + ' ' + l.name).join('; ');
+  });
+  Platform.tools.handle('set_timezone', async args => {
+    clk = await Platform.time.setZone(String(args.zone || ''));
+    if (screen === 'root' || screen === 'dt') render();
+    return 'The time zone is now ' + clk.zone + ' (' + dateOf(clk.local) + ' ' + timeOf(clk.local) + ').';
+  });
+  Platform.tools.handle('set_auto_time', async args => {
+    const on = ['true', 'on', 'yes', '1'].includes(String(args.on).toLowerCase());
+    clk = await Platform.time.setNtp(on);
+    if (screen === 'root' || screen === 'dt') render();
+    return 'Automatic date and time (NTP) is ' + (on ? 'on' : 'off') + '.';
+  });
+  Platform.tools.handle('set_time', async args => {
+    const d = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(args.date || '').trim()), t = /^(\d{1,2}):(\d{2})$/.exec(String(args.time || '').trim());
+    if (!d || !t) throw new Error('give the date as YYYY-MM-DD and the time as HH:MM');
+    clk = await Platform.time.set({year: +d[1], month: +d[2], day: +d[3], hour: +t[1], minute: +t[2]});
+    if (screen === 'root' || screen === 'dt') render();
+    return 'The time is now ' + dateOf(clk.local) + ' ' + timeOf(clk.local) + ' (' + clk.zone + ').';
+  });
+  // the accounts of Communicator and Caroline: she lists and deletes them; adding and editing need the owner's passwords or phone, so she opens the page for them
+  Platform.tools.handle('get_accounts', async () => {
+    await loadAccounts();
+    const rows = accts.filter(shown).map(a => '- ' + a.id + ': ' + a.label + (a.state === 'linked' && a.detail ? ' ' + a.detail : '') + ' (' + (a.role === 'owner' ? "owner's" : activeName() + "'s own") + ', ' + (STATE_TEXT[a.state] || a.state) + ')');
+    return (rows.length ? rows.join('\n') : 'No account is linked.') + '\nServices: ' + Object.keys(SERVICES).join(', ') + '. Every service takes any number of accounts.';
+  });
+  Platform.tools.handle('remove_account', async args => {
+    await loadAccounts();
+    const a = accts.find(x => x.id === String(args.id || '').trim());
+    if (!a || !shown(a)) throw new Error('no such account; ids from get_accounts: ' + accts.filter(shown).map(x => x.id).join(', '));
+    await msgApi('accounts/' + encodeURIComponent(a.id) + '/delete', 'POST');
+    await loadAccounts(); acct = null; if (ACCOUNT_SCREENS.includes(screen)) toAccounts(); else render();
+    return a.label + ' ' + (a.detail || '') + ' was deleted, with its stored messages.';
+  });
+  Platform.tools.handle('open_accounts', async () => {
+    await loadAccounts(); trail = [{screen: 'root', sel: 3}]; screen = 'accounts'; sel = 0; render();
+    return 'The Accounts page is open: the owner adds, edits or deletes accounts there (passwords and codes are typed by the owner).';
+  });
+  Platform.tools.handle('set_language', async args => {
+    const code = String(args.code || '');
+    if (!langs.some(l => l.code === code)) throw new Error('no language "' + code + '"; available: ' + langs.map(l => l.code).join(', '));
+    await Platform.settings.set('language', code);
+    setTimeout(() => location.reload(), 300);   // the whole page changes language
+    return 'The interface language is now ' + code + ' (' + nameOf(code) + ').';
+  });
+  Platform.tools.handle('set_layouts', async args => {
+    const want = String(args.codes || '').split(/[\s,;]+/).filter(Boolean);
+    const bad = want.filter(c => !langs.some(l => l.code === c));
+    if (bad.length) throw new Error('no layout for: ' + bad.join(', '));
+    if (!want.length) throw new Error('keep at least one layout');
+    const next = langs.map(l => l.code).filter(c => want.includes(c));
+    await Platform.settings.set('layouts', next); cur.layouts = next; render();
+    return 'Keyboard layouts: ' + next.join(', ');
+  });
+
+</script>

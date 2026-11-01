@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "id": "ratatosk",
+  "name": "Ratatosk",
+  "version": "0.2.0",
+  "system": true,
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "services": [
+    {"id": "ratatosk", "name": "Ratatosk: chats, calls and the watch for incoming calls", "host": "module", "module": "ratatosk",
+     "start": "system", "priority": 90, "memory_mb": 0, "sleep": true, "takeover": true}
+  ]
+}

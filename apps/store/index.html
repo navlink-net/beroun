@@ -1,0 +1,231 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Store</title>
+<meta name="viewport" content="width=640,height=480">
+<!-- The Store: find, install, update and remove the apps of apps.navlink.net for OS Beroun. The cursor and A (Enter) and B (Escape) only.
+     The list: Up/Down choose, Left/Right change the filter, A opens the card, B leaves. The card: Up/Down scroll, Left/Right choose a button, A does it, B goes back.
+     Everything goes through /api/store/* (the shell does the downloading, the signature check and the install); this page only asks. -->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #head { flex: none; height: 40px; line-height: 40px; padding: 0 14px; background: #000; color: #f2a900; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; }
+  #st { color: #aaa; font-size: 16px; font-weight: normal; }
+  #tabs { flex: none; display: flex; gap: 8px; padding: 6px 14px; background: #1a1a1a; }
+  .tab { padding: 4px 14px; font-size: 16px; border-radius: 14px; background: #2b343c; color: #ddd; }
+  .tab.on { background: #f2a900; color: #000; font-weight: bold; }
+  #list, #card { flex: 1; min-height: 0; overflow: auto; touch-action: none; }
+  .row { height: 54px; padding: 0 14px; display: flex; align-items: center; gap: 12px; font-size: 21px; }
+  .row.sel { background: #f2a900; color: #000; }
+  .row .name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .ver { font-size: 14px; opacity: .7; }
+  .tag { font-size: 13px; padding: 2px 8px; border-radius: 10px; background: #2b343c; color: #ddd; white-space: nowrap; }
+  .row.sel .tag { background: #000; color: #f2a900; }
+  .tag.update { background: #00A2ED; color: #fff; }
+  .empty { padding: 18px 14px; font-size: 18px; color: #999; }
+  #card { display: none; padding: 10px 18px; }
+  #card h2 { margin: 0 0 2px; font-size: 24px; color: #f2a900; }
+  #card .by { font-size: 14px; color: #aaa; margin-bottom: 8px; }
+  #card p { margin: 6px 0; font-size: 17px; line-height: 1.35; }
+  #card h3 { margin: 12px 0 2px; font-size: 15px; color: #f2a900; text-transform: uppercase; letter-spacing: 1px; }
+  #card .bad { color: #ff6b6b; }
+  #acts { flex: none; display: none; gap: 10px; padding: 8px 14px; background: #1a1a1a; }
+  .btn { padding: 8px 18px; font-size: 19px; border-radius: 6px; background: #2b343c; color: #fff; }
+  .btn.sel { background: #f2a900; color: #000; font-weight: bold; }
+  .btn.danger.sel { background: #ff6b6b; }
+  #msg { flex: none; min-height: 26px; padding: 2px 14px 4px; font-size: 16px; color: #aaa; }
+  #msg.err { color: #ff6b6b; }
+</style>
+<div id="head"><span>Store</span><span id="st"></span></div>
+<div id="tabs"></div>
+<div id="list"></div>
+<div id="card"></div>
+<div id="acts"></div>
+<div id="msg"></div>
+<script src="/platform.js"></script>
+<script>
+  const $ = s => document.querySelector(s);
+  const T = (s, args) => Platform.t(s, args);  // every phrase is one key of /i18n/<lang>.json, its {names} filled after the lookup
+  const FILTERS = [['all', 'All'], ['installed', 'Installed'], ['updates', 'Updates']];
+  let apps = [], offline = false, filter = 'all', sel = 0, view = 'list', actions = [], asel = 0, busy = false, wantId = null;
+
+  async function api(method, path, body) {
+    const r = await fetch('/api/store/' + path, {method, headers: {'Content-Type': 'application/json'}, body: body ? JSON.stringify(body) : undefined});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('Error ' + r.status));
+    return j;
+  }
+
+  const say = (t, err) => { const m = $('#msg'); m.textContent = t || ''; m.className = err ? 'err' : ''; };
+  const sizeText = n => !n ? '' : n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+  const TAG = {update: 'update', installed: 'installed', system: 'system', available: '', unsupported: 'not for this device'};
+  const DONE = {installed: '{name} installed (v{v}).', updated: '{name} updated (v{v}).', restored: '{name} restored (v{v}).'};
+
+  function shown() {
+    const f = filter;
+    return apps.filter(a => f === 'all' || (f === 'updates' ? a.state === 'update' : ['installed', 'system', 'update'].includes(a.state)))
+      .sort((a, b) => (b.state === 'update') - (a.state === 'update') || a.name.localeCompare(b.name));
+  }
+
+  function drawTabs() {
+    const t = $('#tabs'); t.innerHTML = '';
+    const n = apps.filter(a => a.state === 'update').length;
+    FILTERS.forEach(([k, label]) => {
+      const d = document.createElement('span'); d.className = 'tab' + (k === filter ? ' on' : '');
+      d.textContent = T(label) + (k === 'updates' && n ? ' (' + n + ')' : ''); d.onclick = () => { filter = k; sel = 0; draw(); };
+      t.appendChild(d);
+    });
+  }
+
+  function draw() {
+    drawTabs();
+    $('#st').textContent = offline ? T('Offline: only this device') : '';
+    const list = $('#list'); list.innerHTML = '';
+    const rows = shown();
+    sel = Math.max(0, Math.min(sel, rows.length - 1));
+    rows.forEach((a, i) => {
+      const d = document.createElement('div'); d.className = 'row' + (i === sel ? ' sel' : '');
+      const n = document.createElement('span'); n.className = 'name'; n.textContent = a.name;
+      const v = document.createElement('span'); v.className = 'ver'; v.textContent = a.version ? 'v' + a.version : '';
+      d.append(n, v);
+      if (TAG[a.state]) { const t = document.createElement('span'); t.className = 'tag' + (a.state === 'update' ? ' update' : ''); t.textContent = T(TAG[a.state]); d.appendChild(t); }
+      d.onclick = () => { sel = i; open(); };
+      list.appendChild(d);
+    });
+    if (!rows.length) list.innerHTML = '<div class="empty">' + T(filter === 'updates' ? 'Everything is up to date.' : offline ? 'The store cannot be reached.' : 'Nothing here.') + '</div>';
+    const cur = list.children[sel]; if (cur && cur.scrollIntoView) cur.scrollIntoView({block: 'nearest'});
+  }
+
+  let ASSISTANT = 'Caroline';   // the assistant of this build (its name in the lines about what an app may ask of it)
+  fetch('/api/assistant/providers').then(r => r.json()).then(j => { const p = (j.providers || []).find(x => x.active); if (p) ASSISTANT = p.name; }).catch(() => {});
+
+  function rights(a) {
+    const s = a.summary, out = [];
+    if (!s) return [T(a.in_store ? 'No details.' : 'Part of the device.')];
+    (s.capabilities || []).length && out.push(T('Uses: {list}', {list: s.capabilities.map(c => c.required ? T('{name} (needed)', {name: c.name}) : c.name).join(', ')}));
+    (s.permissions || []).some(p => p === 'caroline.ask' || p === 'assistant.ask') && out.push(T('Can ask ' + ASSISTANT + '.'));   // the new name of the permission too
+    (s.services || []).length && out.push(T('Runs in the background: {list}', {list: s.services.map(x => x.id + (x.memoryMb ? ' (' + x.memoryMb + ' MB)' : '')).join(', ')}));
+    (s.agents || []).length && out.push(T('Agents for ' + ASSISTANT + ': {list}', {list: s.agents.map(x => x.id + ((x.permissions || []).length ? ' (' + T('system') + ': ' + x.permissions.join(', ') + ')' : '') + ((x.camerlengo || []).length ? ' (Camerlengo: ' + x.camerlengo.join(', ') + ')' : '')).join('; ')}));
+    return out.length ? out : [T('Nothing special.')];
+  }
+
+  function buttonsFor(a) {
+    const b = [];
+    if (a.state === 'available') b.push({k: 'install', label: T('Install')});
+    if (a.state === 'update') b.push({k: 'install', label: T('Update to v{v}', {v: a.version})});
+    if (['installed', 'update'].includes(a.state) && a.kind !== 'system') b.push({k: 'remove', label: T('Remove'), danger: true});
+    b.push({k: 'back', label: T('Back')});   // B does the same; the button shows the way out
+    return b;
+  }
+
+  function open() {
+    const a = shown()[sel]; if (!a || busy) return;
+    view = 'card'; wantId = a.id; say('');
+    const c = $('#card'); c.innerHTML = '';
+    const add = (tag, text, cls) => { const e = document.createElement(tag); e.textContent = text; if (cls) e.className = cls; c.appendChild(e); return e; };
+    add('h2', a.name);
+    add('div', [a.author && T('by {author}', {author: a.author}), a.category, a.kind === 'system' ? T('system app') : a.kind === 'preinstalled' ? T('comes with the device') : ''].filter(Boolean).join(' · '), 'by');
+    add('p', [a.installed ? T('Installed: v{v}.', {v: a.installed}) : T('Not installed.'),
+      a.in_store && a.version && a.version !== a.installed ? (a.size ? T('In the store: v{v} ({size}).', {v: a.version, size: sizeText(a.size)}) : T('In the store: v{v}.', {v: a.version})) : ''].filter(Boolean).join(' '));
+    if (a.description) add('p', a.description);
+    if (a.state === 'unsupported') add('p', a.lacking && a.lacking.length ? T('This device lacks what it needs: {list}.', {list: a.lacking.join(', ')}) : T('It is not for this device.'), 'bad');
+    if (a.kind === 'system') add('p', T('A system app: it can be updated, never removed.'));
+    add('h3', T('It asks for'));
+    rights(a).forEach(t => add('p', t));
+    actions = buttonsFor(a); asel = 0;
+    $('#list').style.display = $('#tabs').style.display = 'none'; c.style.display = 'block'; c.scrollTop = 0;
+    drawActs();
+  }
+
+  function drawActs() {
+    const bar = $('#acts'); bar.innerHTML = '';
+    bar.style.display = actions.length ? 'flex' : 'none';
+    actions.forEach((b, i) => { const d = document.createElement('span'); d.className = 'btn' + (b.danger ? ' danger' : '') + (i === asel ? ' sel' : ''); d.textContent = b.label; d.onclick = () => { asel = i; act(); }; bar.appendChild(d); });
+  }
+
+  function back() {
+    view = 'list'; $('#card').style.display = 'none'; $('#acts').style.display = 'none'; $('#list').style.display = ''; $('#tabs').style.display = ''; say(''); draw();
+  }
+
+  async function load() {
+    say('');
+    try {
+      const r = await api('GET', 'catalog');
+      apps = r.apps; offline = r.offline;
+    } catch (e) { say(e.message, true); }
+    const i = shown().findIndex(a => a.id === wantId); if (i >= 0) sel = i;
+    if (view === 'list') draw();
+  }
+
+  async function act() {
+    const a = shown()[sel], b = actions[asel]; if (!a || !b || busy) return;
+    if (b.k === 'back') return back();
+    if (b.k === 'remove') {
+      const r = await Platform.messageBox({title: T('Remove {name}?', {name: a.name}), text: T(a.kind === 'preinstalled' ? 'It is taken off the device; its data stays. You can install it again.' : 'Its data will be deleted.'), kind: 'yesno', default: 1});
+      if (r.index !== 0) return;
+    }
+    busy = true; say(T(b.k === 'remove' ? 'Removing {name}…' : 'Installing {name}…', {name: a.name}));
+    try {
+      const r = await api('POST', b.k, {app: a.id});
+      await load();
+      busy = false;
+      const done = T(DONE[r.action] || DONE.installed, {name: a.name, v: r.version});
+      if (b.k === 'remove') { back(); say(T('{name} removed.', {name: a.name})); } else { say(done); const i = shown().findIndex(x => x.id === a.id); if (i >= 0) { sel = i; open(); say(done); } }
+    } catch (e) { busy = false; say(e.message, true); }
+  }
+
+  addEventListener('keydown', e => {
+    if (busy) { e.preventDefault(); return; }
+    const k = e.key;
+    if (view === 'list') {
+      if (k === 'ArrowUp') sel = Math.max(0, sel - 1);
+      else if (k === 'ArrowDown') sel = Math.min(shown().length - 1, sel + 1);
+      else if (k === 'ArrowLeft' || k === 'ArrowRight') { const i = FILTERS.findIndex(f => f[0] === filter); filter = FILTERS[(i + (k === 'ArrowRight' ? 1 : FILTERS.length - 1)) % FILTERS.length][0]; sel = 0; }
+      else if (k === 'Enter') { e.preventDefault(); return open(); }
+      else if (k === 'Escape') { e.preventDefault(); return Platform.exit(); }
+      else return;
+      e.preventDefault(); draw();
+    } else {
+      const c = $('#card');
+      if (k === 'ArrowUp') c.scrollTop -= 60;
+      else if (k === 'ArrowDown') c.scrollTop += 60;
+      else if (k === 'ArrowLeft') { asel = Math.max(0, asel - 1); drawActs(); }
+      else if (k === 'ArrowRight') { asel = Math.min(actions.length - 1, asel + 1); drawActs(); }
+      else if (k === 'Enter') { e.preventDefault(); return act(); }
+      else if (k === 'Escape') { e.preventDefault(); return back(); }
+      else return;
+      e.preventDefault();
+    }
+  });
+
+  // drag to scroll the list with the touchscreen
+  (() => {
+    for (const l of [$('#list'), $('#card')]) {
+      let d = null, dragged = false;
+      l.addEventListener('pointerdown', e => { d = {y: e.clientY, st: l.scrollTop}; dragged = false; });
+      l.addEventListener('pointermove', e => { if (!d) return; const dy = e.clientY - d.y; if (!dragged && Math.abs(dy) > 8) { dragged = true; l.setPointerCapture(e.pointerId); } if (dragged) l.scrollTop = d.st - dy; });
+      l.addEventListener('pointerup', () => { d = null; }); l.addEventListener('pointercancel', () => { d = null; });
+      l.addEventListener('click', e => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+    }
+  })();
+
+  // Caroline's tools for this page (manifest: "caroline"): what it shows, and showing an app's card
+  Platform.tools.handle('status', async () => {
+    await load();
+    const n = apps.filter(a => a.state === 'update').length;
+    return 'Store: ' + apps.length + ' apps, ' + n + ' with an update' + (offline ? ', offline (only what is on the device)' : '') + '; filter: ' + filter + (view === 'card' ? '; the card of ' + wantId + ' is open' : '') + '.';
+  });
+  Platform.tools.handle('show', async args => {
+    await load();
+    filter = 'all'; if (view === 'card') back();
+    const i = shown().findIndex(a => a.id === String(args.app || ''));
+    if (i < 0) throw new Error('"' + args.app + '" is not in the list: use beroun_store_catalog for the ids');
+    sel = i; draw(); open();
+    return 'Showing ' + shown()[i].name + ' (' + shown()[i].state + ').';
+  });
+
+  // state: the filter and the app that was chosen come back (the app shares its window with the others)
+  Platform.onClose(() => Platform.state.set({filter, id: (shown()[sel] || {}).id || wantId}));
+  Platform.state.get().then(s => { if (s) { if (FILTERS.some(f => f[0] === s.filter)) filter = s.filter; wantId = s.id || null; } }).catch(() => {}).then(() => { draw(); load(); setInterval(() => { if (view === 'list' && !busy) load(); }, 60000); });
+</script>

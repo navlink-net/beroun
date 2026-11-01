@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "caroline-wizard",
+  "name": "Caroline",
+  "version": "0.1.0",
+  "icon": "icon.svg",
+  "frontend": {"url": "http://127.0.0.1:48767/wizard", "window": "own"},
+  "tile": {"hidden": true},
+  "state": false
+}

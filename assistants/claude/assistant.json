@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "id": "claude",
+  "name": "Claude",
+  "module": "claude",
+  "service": "claude-backend",
+  "views": {
+    "chat": "assistant-chat",
+    "voice": "assistant-voice",
+    "wizard": "assistant-wizard",
+    "settings": "assistant-wizard"
+  },
+  "capabilities": [
+    "ask",
+    "chat",
+    "voice",
+    "wizard"
+  ],
+  "tools": "mcp",
+  "files": [
+    "runtime/assistant_common.py",
+    "runtime/claude_assistant.py",
+    "runtime/claude_backend.py",
+    "runtime/qr.py",
+    "scripts/claude-provision.sh",
+    "tests/claude_backend_test.py"
+  ]
+}

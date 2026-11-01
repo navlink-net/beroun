@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "id": "notepad",
+  "name": "Notepad",
+  "version": "1.1.0",
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "opens": ["txt"],
+  "caroline": {
+    "description": "Plain-text notes: read, write and open the note on the screen",
+    "skills": ["skills"],
+    "tools": [
+      {"name": "get_text", "description": "The text of the open note and its file", "input": {}},
+      {"name": "set_text", "description": "Replaces the whole text of the open note", "input": {"text": "string"}},
+      {"name": "append_text", "description": "Adds text at the end of the open note", "input": {"text": "string"}}
+    ]
+  }
+}

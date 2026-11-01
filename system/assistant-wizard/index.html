@@ -1,0 +1,180 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=640,initial-scale=1">
+<title>Assistant</title>
+<script src="/platform.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #111; color: #fff; overflow: hidden; font-family: "DejaVu Sans", sans-serif; }
+  body { display: flex; flex-direction: column; padding: 14px 18px; gap: 10px; }
+  h1 { margin: 0; font-size: 23px; color: #f2a900; }
+  #text { font-size: 17px; line-height: 1.35; opacity: .9; }
+  #main { flex: 1; min-height: 0; display: flex; gap: 16px; align-items: center; }
+  #qr { display: none; flex: none; width: 250px; height: 250px; background: #fff; border-radius: 6px; padding: 6px; }
+  #qr.on { display: block; }
+  #side { flex: 1; display: flex; flex-direction: column; gap: 10px; font-size: 16px; }
+  #code { display: none; height: 42px; border: 0; border-radius: 8px; padding: 0 12px; font: 17px "DejaVu Sans Mono", monospace; background: #fff; color: #000; outline: 0; }
+  #code.on { display: block; }
+  #code:focus { outline: 3px solid #f2a900; }
+  #err { color: #ff6b6b; font-size: 16px; min-height: 22px; }
+  #btns { display: flex; gap: 10px; }
+  #btns span { flex: 1; min-width: 0; height: 44px; line-height: 38px; padding: 0 6px; text-align: center; font-size: 16px; border-radius: 8px; border: 3px solid #f2a900;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #btns span.sel { background: #f2a900; color: #000; }
+</style>
+</head>
+<body>
+<h1 id="title" translate="no">Assistant</h1>
+<div id="text"></div>
+<div id="main"><img id="qr" alt=""><div id="side"><div id="hint"></div><input id="code" autocomplete="off" spellcheck="false" placeholder="Code"></div></div>
+<div id="err"></div>
+<div id="btns"></div>
+<script>
+// The standard wizard and settings view of OS Beroun for an assistant that signs in to an account of its own (Claude: the owner's Claude Code login,
+// docs/assistant-contract.md). After the device's login the shell shows it while the assistant's wizard is needed; Settings > Assistant opens it ({settings: true}).
+// Signing in: in the device browser (the default, signInBrowser), or with a phone: the backend starts the CLI's login and gives the sign-in link, shown as a QR code;
+// the owner opens it on a phone, signs in, and types the code it shows into the field here (Codex: enters the shown code on the phone); or, where the backend takes one
+// (its `methods` has "key": Codex), an API key typed or pasted into the field. Every word goes through the translation (Platform.t; a name or an account inside a sentence
+// through the patterns with {0}). Keys: Left / Right choose a button, A confirms, Up / Down move between the field and the buttons, B leaves.
+const $ = s => document.querySelector(s);
+const T = t => Platform.t(t);
+let info = null, base = '', mode = 'wizard', btns = [], sel = 0, st = null, working = false;
+
+const get = p => fetch(base + p).then(r => r.json());
+const post = (p, body) => fetch(base + p, {method: 'POST', body: JSON.stringify(body || {})}).then(r => r.json());   // text/plain: a simple request, no preflight
+
+function buttons(list) {
+  btns = list; sel = Math.min(sel, list.length - 1);
+  const b = $('#btns'); b.textContent = '';
+  list.forEach((x, i) => { const s = document.createElement('span'); s.textContent = T(x.label); s.className = i === sel ? 'sel' : ''; s.onclick = () => { sel = i; press(); }; b.appendChild(s); });
+}
+function mark() { [...$('#btns').children].forEach((s, i) => s.className = i === sel ? 'sel' : ''); }
+async function press() { const b = btns[sel]; if (b && !working) { working = true; try { await b.run(); } catch (e) { $('#err').textContent = e.message; } working = false; } }
+
+function screen(text, hint, list, qr, code) {
+  $('#text').textContent = T(text); $('#hint').textContent = hint ? T(hint) : '';
+  $('#qr').className = qr ? 'on' : ''; if (qr) $('#qr').src = base + '/api/auth/qr.svg?t=' + Date.now();
+  $('#code').className = code ? 'on' : ''; if (!code) $('#code').blur();
+  $('#code').type = code === 'key' ? 'password' : 'text'; $('#code').placeholder = T(code === 'key' ? 'API key' : 'Code');
+  sel = 0; buttons(list);
+}
+
+function home() {
+  $('#err').textContent = '';
+  const name = info.name || 'The assistant';
+  if (st && st.signed_in) {
+    screen(`${name} is signed in` + (st.email ? ` as ${st.email}` : '') + '.', '',
+           mode === 'settings' ? [{label: 'Close', run: async () => Platform.exit()}, {label: 'Sign out', run: signOut}, {label: 'Sign in again', run: signInBrowser}]
+                               : [{label: 'Done', run: async () => Platform.exit()}]);
+  } else {
+    const key = ((st && st.methods) || []).includes('key');
+    screen(`${name} works with your ${T((st && st.label) || 'account')}. Sign in once, in the browser of this device (or with your phone).`, '',
+           [{label: 'Sign in', run: signInBrowser}, {label: 'With a phone', run: signIn}].concat(key ? [{label: 'API key', run: async () => keyEntry()}] : [],
+             mode === 'settings' ? [{label: 'Close', run: async () => Platform.exit()}] : [{label: 'Later', run: later}]));
+  }
+}
+
+// The sign-in in the device browser (the default): the backend starts the CLI's login with the device browser as its browser; the page comes back to the CLI on this
+// machine, so nothing is typed here. This view steps aside while the browser is on the screen; the backend sees the end, and the wizard is not needed any more.
+async function signInBrowser() {
+  $('#err').textContent = ''; $('#text').textContent = T('Starting the sign-in…');
+  st = await post('/api/auth/start', {browser: true});
+  if (!st.login || st.login.state === 'failed') { $('#err').textContent = (st.login && st.login.error) || T('The sign-in could not start'); return home(); }
+  screen('The sign-in page is open in the browser. Sign in there; this screen sees it end.', '', [{label: 'Cancel', run: async () => { await post('/api/auth/logout'); st = await get('/api/auth/status'); home(); }}], false, false);
+  const mine = btns;
+  for (let i = 0; i < 300; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    if (btns !== mine) return;   // another screen took over (Cancel)
+    try { st = await get('/api/auth/status'); } catch (e) { continue; }
+    if (st.signed_in) { home(); if (mode !== 'settings') setTimeout(() => Platform.exit(), 2500); return; }
+    if (st.login && st.login.state === 'failed') { $('#err').textContent = st.login.error || T('The sign-in did not finish'); return home(); }
+  }
+  home();
+}
+
+async function signIn() {
+  $('#err').textContent = ''; $('#text').textContent = T('Starting the sign-in…');
+  const r = await post('/api/auth/start');
+  st = r;
+  if (!r.login || !r.login.url) { $('#err').textContent = (r.login && r.login.error) || T('The sign-in could not start'); return home(); }
+  if (r.login.kind === 'device') return deviceCode(r.login);
+  screen('Scan the code with your phone and sign in. Then type here the code the page shows, and press Enter.', 'Code:',
+         [{label: 'Confirm', run: sendCode}, {label: 'Cancel', run: async () => home()}], true, true);
+  $('#code').value = ''; $('#code').focus();
+}
+// A sign-in with a code shown here (Codex: ChatGPT's device code): the owner opens the link on a phone and types the code there; nothing is typed here, the backend sees it end.
+async function deviceCode(login) {
+  screen('Scan the code with your phone, sign in, and enter this code there:', login.code, [{label: 'Cancel', run: async () => { await post('/api/auth/logout'); st = await get('/api/auth/status'); home(); }}], true, false);
+  for (let i = 0; i < 300; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    if (!$('#qr').className) return;   // another screen took over (Cancel)
+    try { st = await get('/api/auth/status'); } catch (e) { continue; }
+    if (st.signed_in) { home(); if (mode !== 'settings') setTimeout(() => Platform.exit(), 2500); return; }
+    if (st.login && st.login.state === 'failed') { $('#err').textContent = st.login.error || T('The sign-in did not finish'); return home(); }
+  }
+  home();
+}
+async function sendCode() {
+  const code = $('#code').value.trim();
+  if (!code) { $('#err').textContent = T('Type the code first'); return $('#code').focus(); }
+  $('#err').textContent = ''; $('#hint').textContent = T('Checking…');
+  const r = await post('/api/auth/code', {code});
+  if (r.error) { $('#err').textContent = r.error; $('#hint').textContent = T('Code:'); return; }
+  st = r;
+  if (r.signed_in) { home(); if (mode !== 'settings') setTimeout(() => Platform.exit(), 2500); }
+  else { $('#err').textContent = (r.login && r.login.error) || T('The code was not accepted: try again'); $('#hint').textContent = T('Code:'); }
+}
+// An API key instead of an account (Codex: an OpenAI key; its backend runs `codex login --with-api-key`). The field is a password field: the key is not shown.
+function keyEntry() {
+  $('#err').textContent = '';
+  screen('Type or paste your OpenAI API key, then press Enter.', 'Key:', [{label: 'Confirm', run: sendKey}, {label: 'Cancel', run: async () => home()}], false, 'key');
+  $('#code').value = ''; $('#code').focus();
+}
+async function sendKey() {
+  const key = $('#code').value.trim();
+  if (!key) { $('#err').textContent = T('Type the key first'); return $('#code').focus(); }
+  $('#err').textContent = ''; $('#hint').textContent = T('Checking…');
+  const r = await post('/api/auth/key', {key});
+  $('#code').value = '';
+  if (r.error) { $('#err').textContent = T(r.error); $('#hint').textContent = T('Key:'); return $('#code').focus(); }
+  st = r;
+  if (r.signed_in) { home(); if (mode !== 'settings') setTimeout(() => Platform.exit(), 2500); }
+  else { $('#err').textContent = T('The key was not accepted: check it and try again'); $('#hint').textContent = T('Key:'); $('#code').focus(); }
+}
+async function signOut() { st = await post('/api/auth/logout'); home(); }
+async function later() { await post('/api/wizard/dismiss'); Platform.exit(); }
+
+$('#code').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); sel = 0; press(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); $('#code').blur(); }
+  else if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); $('#code').blur(); }
+});
+addEventListener('keydown', e => {
+  if (e.defaultPrevented || document.activeElement === $('#code')) return;
+  if (e.key === 'ArrowLeft') { sel = Math.max(0, sel - 1); mark(); e.preventDefault(); }
+  else if (e.key === 'ArrowRight') { sel = Math.min(btns.length - 1, sel + 1); mark(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp' && $('#code').className === 'on') { $('#code').focus(); e.preventDefault(); }
+  else if (e.key === 'Enter') { e.preventDefault(); press(); }
+  else if (e.key === 'Escape') { e.preventDefault(); Platform.exit(); }
+});
+
+(async () => {
+  try { const a = await Platform.launchArg(); if (a && a.settings) mode = 'settings'; } catch (e) {}
+  for (let i = 0; i < 30; i++) {
+    try { info = await (await fetch('/api/assistant/status')).json(); } catch (e) { info = null; }
+    if (info && info.running && info.port) break;
+    $('#text').textContent = T('Starting…');
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  if (!info || !info.port) { $('#err').textContent = T('The assistant does not start'); return buttons([{label: 'Close', run: async () => Platform.exit()}]); }
+  $('#title').textContent = info.name || 'Assistant'; document.title = info.name || 'Assistant';
+  base = `http://127.0.0.1:${info.port}`;
+  try { st = await get('/api/auth/status'); } catch (e) { st = null; }
+  home();
+})();
+</script>
+</body>
+</html>

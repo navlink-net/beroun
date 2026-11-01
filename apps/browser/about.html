@@ -1,0 +1,39 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>About IntelliCat</title>
+<meta name="viewport" content="width=640">
+<script src="/i18n.js"></script>
+<!-- The browser's start page. The picture has a white background: multiply lets the page colour show through it. -->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: #fff4e2; color: #1b2152; font-family: "DejaVu Sans", sans-serif; }
+  body { background: radial-gradient(120% 90% at 85% 8%, #fff9ec 0%, #ffe9c4 45%, #ffd9a0 100%) fixed; }
+  .wrap { display: flex; align-items: center; gap: 4px; min-height: 440px; padding: 14px 22px 14px 10px; }
+  .cat { flex: none; width: 300px; position: relative; }
+  .cat img { display: block; width: 100%; height: auto; mix-blend-mode: multiply; }
+  .txt { flex: 1; min-width: 0; }
+  .eyebrow { font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: #c76a00; font-weight: bold; }
+  h1 { margin: 4px 0 6px; font-size: 38px; line-height: 1.05; color: #1b2152; }
+  h1 span { color: #e08400; }
+  p.lead { margin: 0 0 10px; font-size: 17px; line-height: 1.35; color: #3b4170; }
+  ul { margin: 0 0 14px; padding: 0; list-style: none; }
+  li { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; font-size: 16px; color: #1b2152; }
+  li i { flex: none; width: 26px; height: 26px; border-radius: 8px; background: #1b2152; color: #ffd27a; font-style: normal; font-weight: bold; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+  .foot { font-size: 12px; color: #7a6a58; }
+  .foot b { color: #1b2152; }
+</style>
+<div class="wrap">
+  <div class="cat"><img src="cat.webp" alt="IntelliCat"></div>
+  <div class="txt">
+    <div class="eyebrow">Welcome to</div>
+    <h1>Intelli<span>Cat</span></h1>
+    <p class="lead">A pocket AI assistant powered by Caroline.</p>
+    <p class="lead">A full-featured assistant, communicator and secretary in a wearable form factor.</p>
+    <ul>
+      <li><i>A</i>Assistant</li>
+      <li><i>C</i>Communicator</li>
+      <li><i>S</i>Secretary</li>
+    </ul>
+  </div>
+</div>

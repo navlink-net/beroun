@@ -1,0 +1,25 @@
+{
+  "format": 1,
+  "id": "audioplayer",
+  "name": "Music",
+  "version": "1.1.0",
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "opens": ["mp3", "ogg", "oga", "opus", "flac", "wav", "m4a", "aac", "m3u", "m3u8"],
+  "caroline": {
+    "description": "Music player: plays a file, a folder or a playlist from the SD card; pause, skip, seek",
+    "skills": ["skills"],
+    "tools": [
+      {"name": "now_playing", "description": "What plays now: the track, the time, the place in the queue, the order", "input": {}},
+      {"name": "play", "description": "Plays a file (with the rest of its folder after it), a folder (with its subfolders) or a playlist (.m3u) of the SD card", "input": {"path": "string"}},
+      {"name": "pause", "description": "Pauses", "input": {}},
+      {"name": "resume", "description": "Goes on playing", "input": {}},
+      {"name": "next", "description": "The next track", "input": {}},
+      {"name": "previous", "description": "The previous track, or the start of this one", "input": {}},
+      {"name": "stop", "description": "Stops and goes back to the start of the track", "input": {}},
+      {"name": "seek", "description": "Moves within the track by this many seconds (negative: back)", "input": {"seconds": "number"}}
+    ]
+  }
+}

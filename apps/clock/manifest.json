@@ -1,0 +1,31 @@
+{
+  "format": 1,
+  "id": "clock",
+  "name": "Clock",
+  "version": "1.0.0",
+  "permissions": ["caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "tile": {"order": 25},
+  "services": [
+    {"id": "alarmd", "name": "Alarm clock", "host": "process", "cmd": ["python3", "{app}/alarmd.py", "{port}"], "port": 48801,
+     "start": "system", "priority": 95, "memory_mb": 20, "sleep": true, "takeover": true}
+  ],
+  "endpoints": [
+    {"path": "alarms", "methods": ["GET", "POST"], "service": "alarmd"},
+    {"path": "ringing", "methods": ["GET", "POST"], "service": "alarmd"},
+    {"path": "timer", "methods": ["GET", "POST"], "service": "alarmd"}
+  ],
+  "caroline": {
+    "description": "Clock with alarms and a timer: set, list and cancel alarms, start a timer, stop what rings (works with the app closed, the console asleep)",
+    "skills": ["skills"],
+    "mcp": [
+      {"id": "alarms", "transport": "stdio", "cmd": ["python3", "{app}/clock_mcp.py", "{port}"], "service": "alarmd"}
+    ],
+    "tools": [
+      {"name": "show_tab", "description": "Shows a tab of the app on the screen: clock, alarms, timer or stopwatch", "input": {"tab": "string"}},
+      {"name": "current_view", "description": "What the window shows: the tab and, in the alarms tab, the list", "input": {}}
+    ]
+  }
+}

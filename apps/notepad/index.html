@@ -1,0 +1,91 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Notepad</title>
+<meta name="viewport" content="width=640,height=480">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; }
+  textarea { display: block; width: 100%; height: 100%; border: 0; outline: 0; resize: none; padding: 10px 12px;
+             background: #111; color: #eee; font: 22px/1.35 "DejaVu Sans Mono", monospace; }
+</style>
+<textarea id="t" spellcheck="false"></textarea>
+<script src="/platform.js"></script>
+<script>
+  const ta = document.getElementById('t');
+  let path = null, timer = null, writing = Promise.resolve();
+
+  const pad = n => String(n).padStart(2, '0');
+  function stamp() {
+    const d = new Date();
+    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  }
+
+  // "Default": Notepad/Note-YYYYMMDD-HHmmss.txt (a suffix if that name is taken)
+  async function createDefault() {
+    const base = 'Notepad/Note-' + stamp();
+    for (let i = 0; ; i++) {
+      const p = base + (i ? '-' + i : '') + '.txt';
+      try { await Platform.files.write(p, '', {create: true}); return p; }
+      catch (e) { if (e.status !== 409) throw e; }
+    }
+  }
+
+  function save() {
+    clearTimeout(timer);
+    if (path === null) return writing;
+    const text = ta.value, p = path;
+    writing = writing.then(() => Platform.files.write(p, text)).catch(e => { console.error('save failed', e); Platform.notify('Could not save ' + p.split('/').pop() + ': ' + (e.message || e), {level: 'error'}); });
+    return writing;
+  }
+
+  ta.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(save, 500); });
+  // state: the open file, the caret and the scroll come back when the app is opened again (it shares its window with the others)
+  Platform.onClose(async () => {
+    await save();
+    if (path !== null) await Platform.state.set({path, start: ta.selectionStart, end: ta.selectionEnd, top: ta.scrollTop}).catch(() => {});
+  });
+
+  // Caroline's tools for this page (manifest: "caroline"): the open note, read and written
+  Platform.tools.handle('get_text', async () => 'File: ' + path + '\n---\n' + ta.value);
+  Platform.tools.handle('set_text', async a => { ta.value = String(a.text); ta.dispatchEvent(new Event('input')); return 'the note now holds ' + ta.value.length + ' characters'; });
+  Platform.tools.handle('append_text', async a => { ta.value += String(a.text); ta.dispatchEvent(new Event('input')); return 'added; the note now holds ' + ta.value.length + ' characters'; });
+
+  // a lone A press focuses the text again after the keyboard was hidden
+  addEventListener('keydown', e => { if (e.key === 'Enter' && document.activeElement !== ta) { e.preventDefault(); ta.focus(); } });
+
+  // keep the text above the on-screen keyboard
+  addEventListener('osk', e => { ta.style.height = (innerHeight - e.detail.height) + 'px'; });
+
+  // the file dialog is the top of Notepad: B in a note closes it and comes back to the dialog; B in the dialog leaves
+  let first = true;
+  async function openNote() {
+    const arg = first ? await Platform.launchArg().catch(() => null) : null;   // started by the file manager with a file
+    const st = first && !(arg && arg.open) ? await Platform.state.get().catch(() => null) : null;   // else: back to where it was closed
+    let r = arg && arg.open ? {path: arg.open} : null, at = null;
+    if (!r && st && st.path) {
+      try { await Platform.files.read(st.path); r = {path: st.path}; at = st; } catch (e) { /* the file is gone: the dialog */ }
+    }
+    first = false;
+    if (!r) r = await Platform.pickFile({ext: 'txt'});
+    if (!r) return Platform.exit();       // B at the top of the dialog leaves Notepad
+    let p = null;
+    ta.value = '';
+    if (r.path) {
+      try { ta.value = (await Platform.files.read(r.path)).text; p = r.path; }
+      catch (e) { console.error('open failed', e); }
+    }
+    path = p || await createDefault();    // "Default" (or a file that could not be read)
+    Platform.db.set('lastFile', path).catch(() => {});
+    ta.focus();
+    if (at && p) { ta.setSelectionRange(at.start || 0, at.end || 0); ta.scrollTop = at.top || 0; }
+  }
+  addEventListener('keydown', async e => {
+    if (e.key !== 'Escape' || path === null) return;
+    e.preventDefault();
+    await save(); path = null;
+    await Platform.state.set({}).catch(() => {});   // closed on purpose: the next start opens the dialog
+    openNote();
+  });
+  openNote();
+</script>

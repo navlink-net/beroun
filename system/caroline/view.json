@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "caroline",
+  "name": "Caroline",
+  "version": "0.2.0",
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "own", "microphone": true},
+  "tile": {"order": 0},
+  "state": false
+}

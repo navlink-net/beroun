@@ -38,6 +38,7 @@ Caroline herself is a separate project.
 | `system/` | The system's own views (assistant, Caroline chat, voice and wizard) and `services.json` |
 | `caroline-overlay/` | Code that runs inside Caroline's process, without patching her checkout |
 | `beroun-tools/` | `beroun_*` tools: every API of the system has one for the assistant |
+| `virtual-hardware/` | `vhw.py`: the reference implementation of the hardware layer (uinput gamepad, power-supply files); a target supplies its own |
 | `native/` | Native helpers in C (browser host on WPE, talking head, splash screens) |
 | `config/` | `apps.json`, `buttons.json`, `weston.ini`, `versions.env`, audio and swap settings |
 | `packages/` | Example portable package |

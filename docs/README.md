@@ -33,4 +33,4 @@ Field-level references: [app-format.md](app-format.md) (the manifest), [system-a
 ## Code layout
 
 The sources sit at the root of the repository: `runtime/`, `web-shell/`, `apps/`, `system/`, `assistants/`, `caroline-overlay/`,
-`beroun-tools/`, `native/`, `config/`, `packages/`, `scripts/`. Caroline is the submodule `caroline/`.
+`beroun-tools/`, `native/`, `virtual-hardware/`, `config/`, `packages/`, `scripts/`. Caroline is the submodule `caroline/`.

@@ -140,7 +140,7 @@ class SystemClock(_Base):
         try:
             self.run(["hwclock", "-w", "-u"], capture_output=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
-            pass  # no RTC (the the device has none of its own): the time is set again at the next start
+            pass  # no RTC (a device may have none of its own): the time is set again at the next start
 
     def status(self):
         with self._lock:

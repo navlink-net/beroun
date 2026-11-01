@@ -442,7 +442,7 @@ _beep_path = None
 
 
 def beep():
-    """A short beep through the sound card (the the device has a speaker; the simulator uses the WSLg sound)."""
+    """A short beep through the sound card (a device has a speaker; the simulator uses the WSLg sound)."""
     global _beep_path
     import math, struct, wave
     if _beep_path is None:

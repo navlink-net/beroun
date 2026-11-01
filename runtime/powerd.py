@@ -28,6 +28,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SIM = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TARGET = os.environ.get("BEROUN_TARGET") or SIM   # the folder of the target (the simulator, a device build) whose scripts/start.sh and stop.sh power it on and off
 STATE = os.environ.get("INTELLICAT_STATE", os.path.expanduser("~/.intellicat/run"))
 HOLD_S = float(os.environ.get("POWERD_HOLD_S", "2.0"))
 FAREWELL_S = float(os.environ.get("POWERD_FAREWELL_S", "2.5"))
@@ -112,7 +113,7 @@ def power_off():
         log("farewell screen shown" if farewell else "no farewell screen (no program or no screen)")
         time.sleep(FAREWELL_S if farewell else 0.2)
         try:
-            subprocess.run(["bash", os.path.join(SIM, "scripts", "stop.sh")], timeout=30, start_new_session=True,
+            subprocess.run(["bash", os.path.join(TARGET, "scripts", "stop.sh")], timeout=30, start_new_session=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:  # noqa: BLE001
             log(f"stop.sh: {e}")
@@ -143,7 +144,7 @@ def power_on():
             env["INTELLICAT_MEM_LIMIT"] = open(os.path.join(STATE, "mem_limit")).read().strip()
         except OSError:
             pass
-        boot = subprocess.Popen(["bash", os.path.join(SIM, "scripts", "start.sh"), "--console"], env=env, start_new_session=True,
+        boot = subprocess.Popen(["bash", os.path.join(TARGET, "scripts", "start.sh"), "--console"], env=env, start_new_session=True,
                                 stdout=open(os.path.join(STATE, "powerd-start.log"), "ab"), stderr=subprocess.STDOUT)
         screen = None
         for _ in range(300):   # Weston's socket appears within a couple of seconds: from then on the cat covers the screen

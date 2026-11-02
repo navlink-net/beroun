@@ -1,7 +1,7 @@
 {
   "_comment": "PUBLIC keys only (base64, 32 bytes) of the system images; the private halves are their owner's. 'dev': signs local builds (a locked device refuses it); 'release': the developer's signing key; 'sender': the developer's X25519 key, the only one that can encrypt an image for a device; 'enc': the device's X25519 key (its private half is in the device's boot ROM / secure storage).",
-  "dev": "0s29q509v7g/MrCyPdks/FfF+lGlHJwOGgGzHjsKwV4=",
-  "release": "",
-  "sender": "phwPjcPfFcBRRR7zYBguXTKGCloKDoa/KsJyOBvbuG8=",
-  "enc": "iS1TBhlZagO8zAIb96umA1Us7QF7xD5WBCFf7L00M1s="
+  "dev": "7znThO7bwCXEwmPZ4N5uA1D9D4bwyaagI6NU7pZn+gc=",
+  "release": "fALEcbI1nklQiFjdG0ZefCWgSvPfWjbdkYYmMmfTxXs=",
+  "sender": "3crgpSJTmUP0vPDdc9tAZmUzxfeYOVhbD3oRDKEJUBg=",
+  "enc": "LeLwnY0/55rIozSTUMH8nPPA9npc139DM6/hZrjSJwg="
 }

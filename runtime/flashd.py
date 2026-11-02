@@ -212,6 +212,22 @@ class Flasher:
                 pass   # the checks say so, on the device's screen
         threading.Thread(target=self._run, args=(path,), daemon=True, name="flashd").start()
 
+    def set_active(self, slot):
+        """fastboot set_active: the slot that starts next (one that holds an image that is good). The running slot is not changed while a flash goes on."""
+        with self.lock:
+            if self.st["state"] not in ("idle", "failed"):
+                raise FlashError("the device is flashing")
+            b = self.bootctl()
+            if slot not in ("a", "b"):
+                raise FlashError("the slot is a or b")
+            if slot == b["active"]:
+                return
+            if (b["slots"].get(slot) is None and slot != "a") or not self._slot_ok(b, slot):   # slot A with no image is the factory system
+                raise FlashError(f"slot {slot.upper()} holds no good system")
+            b["trial"] = None
+            b["active"] = slot
+            self._save(b)
+
     def dismiss(self):
         with self.lock:
             if self.st["state"] == "failed":

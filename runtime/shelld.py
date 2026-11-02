@@ -16,7 +16,7 @@ from vhw import VirtualHardware  # noqa: E402
 import display  # noqa: E402
 import importlib  # noqa: E402
 import board  # noqa: E402
-import flashd, imagefmt  # noqa: E402
+import fastbootd, flashd, imagefmt  # noqa: E402
 import a2a_bridge, a2a_client, agents, androidhost, audio, appinstall, assistant, caroline, caroline_ask, caroline_update, extdisplay, extensions, extinput, extscreen, face, manifest, netctl, nativeproc, ratatosk, services, stt_checks, sw, sysapi, sysnotice, timectl, webaudio  # noqa: E402
 NET = netctl.make()
 
@@ -154,6 +154,11 @@ BOOT = os.environ.get("BEROUN_BOOT_RESULT") or FLASH.boot()   # the simulator's 
 print(f"boot: {BOOT} (system {FLASH.info()['version']}, slot {FLASH.info()['slot'].upper()})", flush=True)
 if BOOT == "hang":   # the simulated broken system: the launcher never comes up, the watchdog restarts the device
     threading.Thread(target=lambda: (time.sleep(10), print("boot: the system did not come up, restarting", flush=True), _restart_device()), daemon=True, name="boot-hang").start()
+if not ONLINE:   # the virtual USB cable's fastboot (scripts/beroun-flash.py, or `fastboot -s tcp:localhost:<port>`): answers only while the cable is plugged in
+    try:
+        fastbootd.Server(FLASH, 5554 + PORT_OFFSET, _restart_device).start()
+    except OSError as e:
+        print(f"fastbootd: {e}", flush=True)
 MAX_READ = 1024 * 1024
 CLOSE_GRACE = 2.0  # seconds an app gets to save and answer "closed" after MODE, then it is killed
 BUTTONS = json.load(open(board.layer("buttons.json")))

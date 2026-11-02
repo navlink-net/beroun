@@ -164,7 +164,8 @@ def _update_url():
         return ""
 
 
-UPDATER = updated.Updater(FLASH, board.env("BOARD_NAME", "unknown"), _update_url(), os.path.join(os.environ.get("EMMC_DIR", os.path.expanduser("~/.intellicat/emmc")), "ota"), enabled=not ONLINE)
+UPDATER = updated.Updater(FLASH, board.env("BOARD_NAME", "unknown"), _update_url(), os.path.join(os.environ.get("EMMC_DIR", os.path.expanduser("~/.intellicat/emmc")), "ota"), enabled=not ONLINE,
+                         auto=lambda: settings_get()["auto_update"], idle=lambda: not running())
 UPDATER.start_auto()
 if not ONLINE:   # the virtual USB cable's fastboot (scripts/beroun-flash.py, or `fastboot -s tcp:localhost:<port>`): answers only while the cable is plugged in
     try:

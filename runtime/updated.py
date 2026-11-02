@@ -20,7 +20,8 @@ CHECK_EVERY = 6 * 3600
 
 
 class Updater:
-    def __init__(self, flash, board, url, ota_dir, enabled=True, every=CHECK_EVERY):
+    def __init__(self, flash, board, url, ota_dir, enabled=True, every=CHECK_EVERY, auto=None, idle=None, retry=600):
+        self.auto, self.idle, self.retry = auto, idle, retry   # the policy: install by itself (auto()) when nothing is in use (idle()), else wait and ask
         self.flash, self.board, self.url, self.dir, self.enabled, self.every = flash, board, (url or "").rstrip("/"), ota_dir, enabled, every
         self.lock = threading.Lock()
         self.st = {"state": "idle", "progress": 0.0, "available": None, "checked": 0, "error": ""}
@@ -37,15 +38,20 @@ class Updater:
         return urllib.request.urlopen(f"{self.url}/{self.board}/{urllib.parse.quote(rel)}", timeout=timeout)
 
     def start_auto(self):
-        """A check a minute after the start and then every few hours (no server set: nothing)."""
+        """A check a minute after the start and then every few hours (no server set: nothing); an offered update is installed by itself when the owner has automatic updates on and nothing is in use."""
         def loop():
             time.sleep(60)
+            nxt = 0
             while True:
                 try:
-                    self.check()
+                    if time.time() >= nxt:
+                        self.check()
+                        nxt = time.time() + self.every
+                    if self.status()["state"] == "available" and self.auto and self.auto() and self.idle and self.idle():
+                        self.install()   # not in use: it installs by itself; when something is open it waits and asks (Settings > System update)
                 except flashd.FlashError:
                     pass
-                time.sleep(self.every)
+                time.sleep(self.retry)
         if self.enabled and self.url:
             threading.Thread(target=loop, daemon=True, name="updated").start()
 

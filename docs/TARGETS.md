@@ -47,4 +47,4 @@ The **image** of a device (the whole system as one read-only filesystem, built f
 AES-256-GCM) with the **developer's** keys, which only the developer holds (the repository has public keys only, `config/system-keys.json`); a device takes only what the
 developer made, in this order: signature, decryption, hash, version (never an older one), then it writes the slot that is not running. A new system is on trial (3 starts,
 it confirms with `POST /api/boot/confirm`), otherwise the device goes back to the previous one; a damaged slot is never booted. What a target provides: the two slots and a
-boot control block (the simulator: a directory, the emulated eMMC), the USB cable state, the battery. See IntelliCat `Simulator/docs/image-ota-plan.md` and `usage.md`.
+boot control block (the simulator: a directory, the emulated eMMC), the USB cable state, the battery. See IntelliCat `Simulator/docs/image-ota-plan.md` and `usage.md`. Also: `runtime/fastbootd.py` (the virtual USB cable: fastboot over TCP, client `scripts/beroun-flash.py`), `runtime/updated.py` (OTA from a static update server, `scripts/beroun-image.py publish/serve`).

@@ -148,6 +148,9 @@ def reboot():
     power_on()
 
 
+_watchdog = {"fails": 0}
+
+
 def power_on():
     """A press of POWER in an off console: the system starts again, the boot screen (the cat) stands over the screen until the launcher is up."""
     if power["state"] != "off" or not _busy.acquire(blocking=False):
@@ -170,12 +173,15 @@ def power_on():
                 break
             time.sleep(0.1)
         boot.wait(timeout=90)
+        up = False
         for _ in range(60):    # shelld up, then the launcher needs a few seconds to draw its first picture under the cat
             try:
                 urllib.request.urlopen(f"{API}/health", timeout=1).read()
+                up = True
                 break
             except Exception:  # noqa: BLE001
                 time.sleep(0.5)
+        _watchdog["fails"] = 0 if up else _watchdog["fails"] + 1
         # the launcher's window is newer than the cat and would cover it: the cat is put up once more over it, until the launcher has drawn
         for _ in range(40):
             if subprocess.run(["pgrep", "-f", "gapplication-app-id=com.intellicat.shell" + os.environ.get("INTELLICAT_APPID_SUFFIX", "") + " "], stdout=subprocess.DEVNULL).returncode == 0:
@@ -189,6 +195,9 @@ def power_on():
                 sc.terminate()
         power["state"] = "on"
         log("on")
+        if not up and _watchdog["fails"] <= 3:   # the watchdog: a system that does not come up is started again (the boot ROM gives a new one up after its 3 starts, flashd.py)
+            log("the system did not come up, restarting")
+            threading.Thread(target=lambda: (time.sleep(2), reboot()), daemon=True, name="watchdog").start()
     except Exception as e:  # noqa: BLE001
         log(f"power on failed: {e}")
         power["state"] = "off"

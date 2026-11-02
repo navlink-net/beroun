@@ -150,7 +150,7 @@ def _battery():
 FLASH = flashd.Flasher(os.environ.get("EMMC_DIR", os.path.expanduser("~/.intellicat/emmc")), board.env("BOARD_NAME", "unknown"),
                        os.path.join(SIM, "config", "system-keys.json"), tree_version(), reboot=_restart_device, power=_battery)
 # the start of the device: the slot is checked, a new system is on trial (it confirms below), one that did not start 3 times is given up (flashd.py)
-BOOT = FLASH.boot()
+BOOT = os.environ.get("BEROUN_BOOT_RESULT") or FLASH.boot()   # the simulator's boot ROM (start.sh) has counted this start already
 print(f"boot: {BOOT} (system {FLASH.info()['version']}, slot {FLASH.info()['slot'].upper()})", flush=True)
 if BOOT == "hang":   # the simulated broken system: the launcher never comes up, the watchdog restarts the device
     threading.Thread(target=lambda: (time.sleep(10), print("boot: the system did not come up, restarting", flush=True), _restart_device()), daemon=True, name="boot-hang").start()
@@ -1492,12 +1492,13 @@ def about():
     its software is the commit it runs, so the build time is that commit's (the device's image writes its own). The time is shown in the device's time zone."""
     fi = FLASH.info()
     version = fi["version"]
-    built = None
-    try:
-        r = subprocess.run(["git", "-C", SIM, "log", "-1", "--format=%ct"], capture_output=True, text=True, timeout=5)
-        built = int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
-    except (OSError, subprocess.SubprocessError, ValueError):
-        pass
+    built = fi.get("built") or None   # a flashed image knows when it was built
+    if not built:
+        try:
+            r = subprocess.run(["git", "-C", SIM, "log", "-1", "--format=%ct"], capture_output=True, text=True, timeout=5)
+            built = int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
     if built is None:
         built = int(os.path.getmtime(os.path.abspath(__file__)))
     loc = timectl._local(built, CLOCK.status()["zone"])[0]

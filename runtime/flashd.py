@@ -24,6 +24,7 @@ AGAINST BRICKING:
 The simulator has no real USB: the cable is a flag (POST /api/usb from the service menu); a device reads its gadget controller.
 """
 import hashlib
+import calendar
 import json
 import os
 import threading
@@ -37,6 +38,14 @@ MIN_BATTERY = 20     # percent: below it flashing wants the charger
 
 class FlashError(Exception):
     pass
+
+
+def _epoch(iso):
+    """The build time of an image.json (UTC, ISO) as epoch seconds; 0 when it is missing."""
+    try:
+        return int(calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")))
+    except (TypeError, ValueError):
+        return 0
 
 
 class Flasher:
@@ -85,7 +94,7 @@ class Flasher:
         b = self.bootctl()
         s = b["slots"].get(b["active"])
         return {"version": s["version"] if s else self.factory_version, "build": s["build"] if s else "", "slot": b["active"],
-                "source": "image" if s else "factory", "board": self.board, "locked": bool(b["locked"]), "trial": bool(b["trial"])}
+                "built": s.get("built", 0) if s else 0, "source": "image" if s else "factory", "board": self.board, "locked": bool(b["locked"]), "trial": bool(b["trial"])}
 
     def status(self):
         b = self.bootctl()
@@ -239,7 +248,7 @@ class Flasher:
                 if imagefmt.sha256_of(back, size) != meta["squashfs_sha256"]:
                     raise imagefmt.ImageError("the slot does not hold what was sent (write error)")
             os.replace(tmp, dest)
-            rec = {"version": meta["version"], "build": meta["build"], "board": meta["board"], "sha256": meta["squashfs_sha256"], "installed": int(time.time())}
+            rec = {"version": meta["version"], "build": meta["build"], "board": meta["board"], "sha256": meta["squashfs_sha256"], "built": _epoch(meta.get("built")), "installed": int(time.time())}
             if meta.get("simulate_boot_failure"):
                 rec["simulate_boot_failure"] = True
             b["slots"][target] = rec

@@ -160,7 +160,7 @@ def cmd_build(a):
     key = load_private(key_path)
     version = a.version or env_version()
     sha = git("rev-parse", "--short", "HEAD") or "nogit"
-    build = sha + ("-dirty" if git("status", "--porcelain") else "")
+    build = sha + ("-dirty" if git("status", "--porcelain", "--ignore-submodules") else "")
     with tempfile.TemporaryDirectory(prefix="beroun-image-") as tmp:
         root = os.path.join(tmp, "root")
         os.makedirs(os.path.join(root, "beroun"))

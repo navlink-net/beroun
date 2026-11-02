@@ -10,6 +10,16 @@ import base64, hashlib, itertools, json, os, re, shutil, signal, sqlite3, subpro
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+_BOOT_T0 = time.time()
+
+
+def _boot(msg):
+    """A milestone of the start, with the seconds since the process began (the start log of the app reads shelld.log: a start that hangs shows where)."""
+    print(f"boot +{time.time() - _BOOT_T0:5.1f}s {msg}", flush=True)
+
+
+_boot(f"shelld starts (python {sys.version.split()[0]}, pid {os.getpid()})")
+
 SIM = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(SIM, "virtual-hardware"))
 from vhw import VirtualHardware  # noqa: E402
@@ -18,6 +28,7 @@ import importlib  # noqa: E402
 import board  # noqa: E402
 import fastbootd, flashd, imagefmt, updated  # noqa: E402
 import a2a_bridge, a2a_client, agents, androidhost, audio, appinstall, assistant, caroline, caroline_ask, caroline_update, extdisplay, extensions, extinput, extscreen, face, manifest, netctl, nativeproc, ratatosk, services, stt_checks, sw, sysapi, sysnotice, timectl, webaudio  # noqa: E402
+_boot("modules imported")
 NET = netctl.make()
 
 STATE = os.environ.get("INTELLICAT_STATE", os.path.expanduser("~/.intellicat/run"))
@@ -3210,15 +3221,18 @@ for _d in sorted(os.listdir(INSTALLED_ROOT)):   # at the start: the installed ap
 
 
 if __name__ == "__main__":
+    _boot("module level done (apps registered); state in " + STATE)
     os.makedirs(STATE, exist_ok=True)
     os.makedirs(os.path.join(HOME_ROOT, "Notepad"), exist_ok=True)
     EXTENSIONS.load(sys.modules[__name__])
+    _boot("extensions loaded")
     try:
         HW.open_input()
         HW.open_power()  # the power key exists from the start: powerd reads it
     except Exception as e:  # noqa: BLE001
         print(f"virtual gamepad: {e}", flush=True)
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
+    _boot(f"port {PORT} bound: the app can show the launcher")
     # Caroline's backend only accepts pages from the origin of her own Linux shell (origin_guard.py): the same page,
     # same port. Everything her wwwroot has is served there; the rest (the shim, /api/*) is this same handler.
     threading.Thread(target=ThreadingHTTPServer(("127.0.0.1", CAROLINE_PAGE_PORT), H).serve_forever, daemon=True).start()
@@ -3283,6 +3297,7 @@ if __name__ == "__main__":
     RATATOSK.start()  # the sync of the chats and the watcher of incoming calls run while there is an account, with the app open or not
     signal.signal(signal.SIGTERM, lambda *_: ([SERVICES.stop(s) for s in list(SERVICES.services) if SERVICES.services[s].host == "process"], [p.stop() for p in ASSISTANT.providers.values()], CAROLINE.stop(), EXT.stop(), HW.close(), os._exit(0)))
     print(f"shelld on 127.0.0.1:{PORT}", flush=True)
+    _boot("all services started")
     threading.Thread(target=ext_pointer_loop, daemon=True, name="ext-pointer").start()
     m = re.fullmatch(r"(\d+)x(\d+)", os.environ.get("INTELLICAT_HDMI", ""))
     if m:  # the simulator starts with the cable plugged in (INTELLICAT_HDMI=1280x720): for the tests and for work on the big screen

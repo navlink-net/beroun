@@ -131,6 +131,7 @@ OS_TOOLS = [
     ("beroun_files_delete", "Deletes a file or folder of the memory card (for good): do it only when asked.", "files/delete", "POST", {"path": "string"}, ("path",)),
     ("beroun_files_space", "How much room the memory card has: total, used and free, in bytes.", "files/space", "GET", {}, ()),
     ("beroun_about", "The device itself: the version of its software, when that software was built, and the hardware it runs on (Settings > About).", "about", "GET", {}, ()),
+    ("beroun_firmware_status", "The system image: the version and build running, which of the two slots (A, B) is active, what each slot holds, the board, whether the device is locked, and the state of a flash in progress (idle, recovery, verifying, writing, done, failed with the reason).", "flash", "GET", {}, ()),
     ("beroun_device", "Where OS Beroun runs: `kind` (intellicat, simulator, hosted or android) and whether there is touch.", "device", "GET", {}, ()),
     ("beroun_capabilities", "What of the device the apps can use (Microphone, Camera, ExternalDisplay, ...): the capabilities this device has.", "capabilities", "GET", {}, ()),
     ("beroun_settings", "The device's settings: language, keyboard layouts, do-not-disturb, vibration, automatic app updates (auto_update) and the rest, as the Settings app shows them.", "settings/get", "GET", {}, ()),

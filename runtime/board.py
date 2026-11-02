@@ -21,3 +21,16 @@ def layer(name):
     if not os.path.isfile(p):
         raise RuntimeError(f"the board has no layer/{name} ({dir()})")
     return p
+
+
+def env(name, default=""):
+    """A value of the board's board.env (NAME="value" lines)."""
+    try:
+        with open(os.path.join(dir(), "board.env"), encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if line.startswith(name + "="):
+                    return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return default

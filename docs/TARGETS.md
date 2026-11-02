@@ -42,3 +42,9 @@ geometry, `BEROUN_RECOVERY_KEYS`) and `layer/`, the files that belong to the dev
 
 The **image** of a device (the whole system as one read-only filesystem, built from the OS and the board's layer) is planned in IntelliCat's
 `Simulator/docs/image-ota-plan.md`.
+
+**Flashing and keeping the device alive** (`runtime/imagefmt.py`, `runtime/flashd.py`, `scripts/beroun-image.py`): an image is signed (Ed25519) and encrypted (X25519 +
+AES-256-GCM) with the **developer's** keys, which only the developer holds (the repository has public keys only, `config/system-keys.json`); a device takes only what the
+developer made, in this order: signature, decryption, hash, version (never an older one), then it writes the slot that is not running. A new system is on trial (3 starts,
+it confirms with `POST /api/boot/confirm`), otherwise the device goes back to the previous one; a damaged slot is never booted. What a target provides: the two slots and a
+boot control block (the simulator: a directory, the emulated eMMC), the USB cable state, the battery. See IntelliCat `Simulator/docs/image-ota-plan.md` and `usage.md`.

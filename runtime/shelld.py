@@ -16,6 +16,7 @@ from vhw import VirtualHardware  # noqa: E402
 import display  # noqa: E402
 import importlib  # noqa: E402
 import board  # noqa: E402
+import flashd, imagefmt  # noqa: E402
 import a2a_bridge, a2a_client, agents, androidhost, audio, appinstall, assistant, caroline, caroline_ask, caroline_update, extdisplay, extensions, extinput, extscreen, face, manifest, netctl, nativeproc, ratatosk, services, stt_checks, sw, sysapi, sysnotice, timectl, webaudio  # noqa: E402
 NET = netctl.make()
 
@@ -118,6 +119,41 @@ APPS = sorted(scan_system() + scan_apps(), key=lambda a: a.get("order", 100)) + 
 HOME_ROOT = os.path.realpath(os.environ.get("INTELLICAT_HOME", "/media/sdcard"))
 DATA_DIR = os.environ.get("INTELLICAT_DATA", os.path.expanduser("~/.intellicat/data"))  # launcher service data, not reachable through the file API
 CLOCK = timectl.make(DATA_DIR, lambda: NET.status()["online"])  # the time, the time zone and network time (runtime/timectl.py)
+
+
+def tree_version():
+    """The version of the tree this shell runs from (config/versions.env): the device's factory system."""
+    try:
+        m = re.search(r'^INTELLICAT_VERSION="([^"]+)"', open(os.path.join(SIM, "config", "versions.env"), encoding="utf-8").read(), re.M)
+        return m.group(1) if m else "?"
+    except OSError:
+        return "?"
+
+
+def _restart_device():
+    """After a flash the device restarts (powerd: off, then on); the simulator without powerd just goes on."""
+    try:
+        urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{8764 + PORT_OFFSET}/reboot", data=b"{}", method="POST"), timeout=5).read()
+    except Exception as e:  # noqa: BLE001
+        print(f"flash: no restart ({e})", flush=True)
+
+
+# the system slots and the flashing (runtime/flashd.py); the storage is the device's eMMC (EMMC_DIR), the keys are OS Beroun's
+
+
+def _battery():
+    """(percent, on the charger) for flashd: a flash wants a charged battery."""
+    p = HW.state()["power"]
+    return int(p["capacity"]), bool(p.get("ac_online")) or "charg" in str(p.get("status", "")).lower() and "dis" not in str(p.get("status", "")).lower()
+
+
+FLASH = flashd.Flasher(os.environ.get("EMMC_DIR", os.path.expanduser("~/.intellicat/emmc")), board.env("BOARD_NAME", "unknown"),
+                       os.path.join(SIM, "config", "system-keys.json"), tree_version(), reboot=_restart_device, power=_battery)
+# the start of the device: the slot is checked, a new system is on trial (it confirms below), one that did not start 3 times is given up (flashd.py)
+BOOT = FLASH.boot()
+print(f"boot: {BOOT} (system {FLASH.info()['version']}, slot {FLASH.info()['slot'].upper()})", flush=True)
+if BOOT == "hang":   # the simulated broken system: the launcher never comes up, the watchdog restarts the device
+    threading.Thread(target=lambda: (time.sleep(10), print("boot: the system did not come up, restarting", flush=True), _restart_device()), daemon=True, name="boot-hang").start()
 MAX_READ = 1024 * 1024
 CLOSE_GRACE = 2.0  # seconds an app gets to save and answer "closed" after MODE, then it is killed
 BUTTONS = json.load(open(board.layer("buttons.json")))
@@ -1454,12 +1490,8 @@ def _settings_table():
 def about():
     """The device (Settings > About, Caroline's beroun_about): the software version (config/versions.env), when it was built and the hardware. The simulator has no build of its own:
     its software is the commit it runs, so the build time is that commit's (the device's image writes its own). The time is shown in the device's time zone."""
-    version = "?"
-    try:
-        m = re.search(r'^INTELLICAT_VERSION="([^"]+)"', open(os.path.join(SIM, "config", "versions.env"), encoding="utf-8").read(), re.M)
-        version = m.group(1) if m else version
-    except OSError:
-        pass
+    fi = FLASH.info()
+    version = fi["version"]
     built = None
     try:
         r = subprocess.run(["git", "-C", SIM, "log", "-1", "--format=%ct"], capture_output=True, text=True, timeout=5)
@@ -1470,7 +1502,8 @@ def about():
         built = int(os.path.getmtime(os.path.abspath(__file__)))
     loc = timectl._local(built, CLOCK.status()["zone"])[0]
     return {"version": version, "build": f"{loc['year']}-{loc['month']:02d}-{loc['day']:02d} {loc['hour']:02d}:{loc['minute']:02d}", "build_epoch": built,
-            "hardware": os.environ.get("INTELLICAT_HARDWARE", "Simulator")}
+            "hardware": os.environ.get("INTELLICAT_HARDWARE", "Simulator"),
+            "board": fi["board"], "slot": fi["slot"].upper(), "image": fi["build"] or None, "trial": fi["trial"]}
 
 
 def settings_get():
@@ -1924,6 +1957,18 @@ class H(BaseHTTPRequestHandler):
         res = sysapi.handle({"sounds": SYSSOUNDS, "vibra": VIBRA, "msgbox": MSGBOX, "clipboard": CLIP, "clip_ask": _clip_ask, "owner": owner}, method, path, q, body)
         return self._json(*res[::-1]) if res else self._json({"error": "not found"}, 404)
 
+    def _usb(self, body):
+        """The USB cable to the PC (the simulator's: a device reads its gadget controller): {connected} from the SERVICE menu of the console window. Not on the hosted simulator."""
+        try:
+            self._console_only(mutating=True)
+            if ONLINE:
+                raise PermissionError("not available on the hosted simulator")
+            if "connected" in body:
+                FLASH.set_usb(bool(body["connected"]))
+            return self._json({"connected": FLASH.usb})
+        except PermissionError as e:
+            return self._json({"error": str(e)}, 403)
+
     def _hdmi(self, body):
         """The cable and the mode of the external screen (the simulator's: the device reads its connector): from the SERVICE menu of the console window and from the Monitor window,
         which reports its size when it is stretched. {connected, width, height} or {width, height} for a new mode only."""
@@ -2376,7 +2421,7 @@ class H(BaseHTTPRequestHandler):
         # hidden apps (test/demo) are not listed but stay launchable by id
         routes = {"/api/apps": lambda: [dict(a, badge=BADGES[a["id"]]) if BADGES.get(a["id"]) else a for a in APPS if not a.get("hidden") and not assistant_view_hidden(a["id"])],
                   "/api/running": running, "/api/hw": HW.state,
-                  "/api/buttons": lambda: BUTTONS, "/api/health": lambda: {"ok": True, "socket": SOCKET, "consoles": CONSOLES["n"]}}
+                  "/api/buttons": lambda: BUTTONS, "/api/flash": FLASH.status, "/api/usb": lambda: {"connected": FLASH.usb}, "/api/health": lambda: {"ok": True, "socket": SOCKET, "consoles": CONSOLES["n"]}}
         if path in routes:
             return self._json(routes[path]())
         if path == "/api/notifications":
@@ -2672,6 +2717,12 @@ class H(BaseHTTPRequestHandler):
             return self._agents("POST", self.path.split("?")[0][len("/api/agents/"):], {}, body if isinstance(body, dict) else {})
         if self.path.startswith(SYSAPI_PREFIXES):
             return self._sysapi("POST", self.path.split("?")[0], {}, body)
+        if self.path == "/api/usb":
+            return self._usb(body if isinstance(body, dict) else {})
+        if self.path == "/api/flash/dismiss":   # the recovery screen's B: a failed flash (or a rollback notice) is acknowledged
+            return self._json(FLASH.dismiss())
+        if self.path == "/api/boot/confirm":   # the launcher is drawn and has stayed up: a system on trial is the system now (flashd.py)
+            return self._json({"confirmed": FLASH.confirm()})
         if self.path == "/api/hdmi":
             return self._hdmi(body)
         if self.path == "/api/hdmi/input":

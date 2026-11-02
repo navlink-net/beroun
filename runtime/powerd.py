@@ -9,6 +9,7 @@ the key code BTN_TRIGGER_HAPPY1 (not the real KEY_POWER: the host logind would p
   long press    (HOLD_S, 2 s, acted on while the button is still down) POWER OFF, forced: the farewell screen (the cat, native/screen/ic-screen) for
                 a moment, then scripts/stop.sh and everything that is left is killed. powerd itself stays: it is the only thing "alive" in an
                 off console
+  restart       POST /reboot (after a flash, runtime/flashd.py): power off, then on
   off           the console window (web-shell/console.html) notices that shelld is gone, shows a black screen and sends the press of POWER to this
                 service (HTTP, 127.0.0.1:8764, /button): a press powers the console ON again: scripts/start.sh, the boot screen (the cat) over
                 the screen until the launcher is up
@@ -132,6 +133,21 @@ def power_off():
         _busy.release()
 
 
+def reboot():
+    """A restart (after a flash): power off, then on; the system of the slot that was made active starts."""
+    for _ in range(240):   # a request that comes while the last power-on is still finishing waits for it (the watchdog of a system that does not come up asks early)
+        if power["state"] == "on":
+            break
+        if power["state"] == "off" and not _busy.locked():
+            return
+        time.sleep(0.5)
+    else:
+        return
+    log("restart")
+    power_off()
+    power_on()
+
+
 def power_on():
     """A press of POWER in an off console: the system starts again, the boot screen (the cat) stands over the screen until the launcher is up."""
     if power["state"] != "off" or not _busy.acquire(blocking=False):
@@ -209,6 +225,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             body = {}
+        if self.path == "/reboot":
+            threading.Thread(target=reboot, daemon=True).start()
         if self.path == "/button" and body.get("name") == "power" and body.get("on") and power["state"] == "off":
             threading.Thread(target=power_on, daemon=True).start()
         self._send({"state": power["state"]})

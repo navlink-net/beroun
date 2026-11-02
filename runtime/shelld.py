@@ -16,7 +16,7 @@ from vhw import VirtualHardware  # noqa: E402
 import display  # noqa: E402
 import importlib  # noqa: E402
 import board  # noqa: E402
-import fastbootd, flashd, imagefmt  # noqa: E402
+import fastbootd, flashd, imagefmt, updated  # noqa: E402
 import a2a_bridge, a2a_client, agents, androidhost, audio, appinstall, assistant, caroline, caroline_ask, caroline_update, extdisplay, extensions, extinput, extscreen, face, manifest, netctl, nativeproc, ratatosk, services, stt_checks, sw, sysapi, sysnotice, timectl, webaudio  # noqa: E402
 NET = netctl.make()
 
@@ -154,6 +154,18 @@ BOOT = os.environ.get("BEROUN_BOOT_RESULT") or FLASH.boot()   # the simulator's 
 print(f"boot: {BOOT} (system {FLASH.info()['version']}, slot {FLASH.info()['slot'].upper()})", flush=True)
 if BOOT == "hang":   # the simulated broken system: the launcher never comes up, the watchdog restarts the device
     threading.Thread(target=lambda: (time.sleep(10), print("boot: the system did not come up, restarting", flush=True), _restart_device()), daemon=True, name="boot-hang").start()
+def _update_url():
+    """Where the update server is: BEROUN_UPDATE_URL, or config/update.json {"url"}."""
+    if os.environ.get("BEROUN_UPDATE_URL"):
+        return os.environ["BEROUN_UPDATE_URL"]
+    try:
+        return str(json.load(open(os.path.join(SIM, "config", "update.json"), encoding="utf-8")).get("url", ""))
+    except (OSError, ValueError):
+        return ""
+
+
+UPDATER = updated.Updater(FLASH, board.env("BOARD_NAME", "unknown"), _update_url(), os.path.join(os.environ.get("EMMC_DIR", os.path.expanduser("~/.intellicat/emmc")), "ota"), enabled=not ONLINE)
+UPDATER.start_auto()
 if not ONLINE:   # the virtual USB cable's fastboot (scripts/beroun-flash.py, or `fastboot -s tcp:localhost:<port>`): answers only while the cable is plugged in
     try:
         fastbootd.Server(FLASH, 5554 + PORT_OFFSET, _restart_device).start()
@@ -2427,7 +2439,7 @@ class H(BaseHTTPRequestHandler):
         # hidden apps (test/demo) are not listed but stay launchable by id
         routes = {"/api/apps": lambda: [dict(a, badge=BADGES[a["id"]]) if BADGES.get(a["id"]) else a for a in APPS if not a.get("hidden") and not assistant_view_hidden(a["id"])],
                   "/api/running": running, "/api/hw": HW.state,
-                  "/api/buttons": lambda: BUTTONS, "/api/flash": FLASH.status, "/api/usb": lambda: {"connected": FLASH.usb}, "/api/health": lambda: {"ok": True, "socket": SOCKET, "consoles": CONSOLES["n"]}}
+                  "/api/buttons": lambda: BUTTONS, "/api/flash": FLASH.status, "/api/update": UPDATER.status, "/api/usb": lambda: {"connected": FLASH.usb}, "/api/health": lambda: {"ok": True, "socket": SOCKET, "consoles": CONSOLES["n"]}}
         if path in routes:
             return self._json(routes[path]())
         if path == "/api/notifications":
@@ -2761,6 +2773,11 @@ class H(BaseHTTPRequestHandler):
                     return self._json(app_tool(body["app"], body["tool"], body.get("args") or {}, screen=body.get("screen") or "console"))
                 except KeyError as e:
                     return self._json({"error": str(e.args[0])}, 404)
+            if self.path in ("/api/update/check", "/api/update/install"):   # Settings > About > System update, Caroline's beroun_system_update_*
+                try:
+                    return self._json((UPDATER.check if self.path.endswith("check") else UPDATER.install)())
+                except flashd.FlashError as e:
+                    return self._json({"error": str(e)}, 409)
             if self.path == "/api/settings/set":
                 return self._fs(lambda: (self._settings_writer(), settings_set(body["key"], body["value"]))[1])
             if self.path == "/api/notifications/dismiss":

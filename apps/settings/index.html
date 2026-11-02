@@ -52,10 +52,11 @@
   let screen = 'root', sel = 0, rows = [], trail = [];
   let clk = null, zones = [], region = '', edit = null;
   let ags = null, journal = [], agentKey = '';
+  let upd = null;   // GET /api/update: {state, progress, available, current, error}
   let about = null;   // GET /api/about: {version, build, hardware}   // the agents the apps publish (read only: the owner looks, nothing is switched here)
   const AGENT_SCREENS = ['agents', 'agent', 'journal'];
   const ACCOUNT_SCREENS = ['accounts', 'account', 'addrole', 'addsvc'];
-  const TITLES = {root: 'Settings', lang: 'Language', layouts: 'Keyboard layouts', dt: 'Date & time', edit: 'Set date and time', zreg: 'Time zone', zcity: 'Time zone', agents: 'Agents', agent: 'Agent', journal: 'Journal of the agents', about: 'About',
+  const TITLES = {root: 'Settings', lang: 'Language', layouts: 'Keyboard layouts', dt: 'Date & time', edit: 'Set date and time', zreg: 'Time zone', zcity: 'Time zone', agents: 'Agents', agent: 'Agent', journal: 'Journal of the agents', about: 'About', update: 'System update',
                   accounts: 'Accounts', account: 'Account', addrole: 'Add account', addsvc: 'Add account'};
   // ---- Assistant: the assistant of this build of OS Beroun (docs/assistant-contract.md): its name, and its own settings ----
   let slot = null;   // GET /api/assistant/providers: {active, providers: [{id, name, installed, active}]}
@@ -135,7 +136,15 @@
         return {k: svc, name: label, val: na ? Platform.t('not available yet') : free || multi ? '' : Platform.t('one account'), off: na || !(free || multi)};
       });
     } else if (screen === 'about') {
-      rows = about ? [{name: 'Software version', val: about.version, info: true}, {name: 'Build', val: about.build, info: true}, {name: 'Hardware', val: about.hardware, info: true}] : [];
+      rows = about ? [{name: 'Software version', val: about.version + (about.slot ? ' (slot ' + about.slot + (about.trial ? ', on trial' : '') + ')' : ''), info: true}, {name: 'Build', val: about.build, info: true}, {name: 'Hardware', val: about.hardware, info: true}]
+        .concat(about.board ? [{name: 'Board', val: about.board, info: true}] : []).concat([{k: 'update', name: 'System update', tl: true}]) : [];
+    } else if (screen === 'update') {
+      const u = upd || {state: 'idle'}, pct = Math.round((u.progress || 0) * 100);
+      const text = {idle: 'Not checked yet', checking: 'Checking...', current: 'The system is up to date', available: 'Version ' + (u.available && u.available.version) + ' is available',
+                    downloading: 'Downloading ' + pct + '%', installing: 'Installing...', failed: u.error || 'Failed'}[u.state] || u.state;
+      rows = [{name: 'Version', val: u.current || '', info: true}, {name: 'Status', val: text, info: true, tl: true}];
+      if (u.available && u.available.notes) rows.push({name: u.available.notes, info: true, tl: true});
+      if (!['checking', 'downloading', 'installing'].includes(u.state)) rows.push({k: u.state === 'available' ? 'install' : 'check', name: u.state === 'available' ? 'Install and restart' : 'Check for updates', tl: true});
     } else if (screen === 'agents') {
       rows = ags ? ags.agents.map(a => ({k: a.key, name: (a.app_name || a.app) + ' / ' + a.id, val: a.spent ? money(a.spent) : ''})).concat([{k: 'journal', name: 'Journal', tl: true, val: ags.calls ? String(ags.calls) : ''}]) : [];
     } else if (screen === 'agent') {
@@ -234,7 +243,18 @@
       try { about = await (await fetch('/api/about')).json(); } catch (e) { about = null; }
       go('about', 0); return;
     }
-    if (screen === 'about') return;   // only to look at
+    if (screen === 'about') {
+      if (r.k !== 'update') return;   // the rest is only to look at
+      try { upd = await (await fetch('/api/update')).json(); } catch (e) { upd = null; }
+      go('update', 0); return;
+    }
+    if (screen === 'update') {
+      try {
+        const x = await fetch('/api/update/' + r.k, {method: 'POST'}), j = await x.json();
+        if (j.error) $('#msg').textContent = Platform.t(j.error); else upd = j;
+      } catch (e) { $('#msg').textContent = Platform.t(e.message); }
+      render(); return;
+    }
     if (screen === 'agents') { agentKey = r.k; const to = r.k === 'journal' ? 'journal' : 'agent'; screen = to; await loadAgents(); screen = 'agents'; go(to, 0); return; }
     if (screen === 'agent' || screen === 'journal') return;   // only to look at
     if (screen === 'root') {
@@ -409,6 +429,7 @@
     if (la && la.screen === 'accounts') { screen = 'accounts'; sel = 0; trail = [{screen: 'root', sel: 3}]; }
     render();
     setInterval(async () => { if (screen === 'root' || screen === 'dt') { await loadClock(); render(); } }, 15000);
+    setInterval(async () => { if (screen === 'update') { try { upd = await (await fetch('/api/update')).json(); render(); } catch (e) { /* the system restarts */ } } }, 1500);
     setInterval(async () => { if (AGENT_SCREENS.includes(screen)) { await loadAgents(); render(); } }, 5000);   // a task or a call of an agent shows up while the page is open
   })();
   // a deeper page (the editor, the zone lists) is saved as the Date & time page it came from

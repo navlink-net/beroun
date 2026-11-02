@@ -194,9 +194,9 @@ class Flasher:
         with self.lock:
             self.st.update(kw)
 
-    def start(self, path):
-        """Begins flashing the image at `path` (a file of this machine); the answer is at once, the process runs in a thread."""
-        if not self.usb:
+    def start(self, path, ota=False):
+        """Begins flashing the image at `path` (a file of this machine); the answer is at once, the process runs in a thread. Over the air (ota) there is no cable."""
+        if not self.usb and not ota:
             raise FlashError("the USB cable is not connected")
         p = self.power() if self.power else None
         if p and p[0] < MIN_BATTERY and not p[1]:

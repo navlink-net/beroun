@@ -9,11 +9,16 @@
         (the simulator's stand-in for the key in a console's boot ROM; no passphrase). Only the public halves go to config/system-keys.json (the repository).
   beroun-image.py build [--board DIR] [--out DIR] [--version V] [--key-id dev|release] [--no-encrypt] [--simulate-boot-failure]
   beroun-image.py verify FILE [--board DIR] [--locked] [--device-key PEM]
+  beroun-image.py publish FILE --to DIR [--notes TEXT] [--force]
+        puts an image into the layout of an update server (static files: DIR/<board>/<image>.img and DIR/<board>/latest.json, what runtime/updated.py reads) after
+        checking it; latest.json moves only forward (an older version is refused unless --force)
+  beroun-image.py serve DIR [--port N]
+        a plain HTTP server over such a folder, to try an update on the simulator (BEROUN_UPDATE_URL=http://localhost:N)
 
 An image is signed (Ed25519) and encrypted (X25519 + AES-256-GCM) by default: runtime/imagefmt.py. --simulate-boot-failure makes an image whose system "never
 comes up" (to try the rollback of a device that does not start); it is for the simulator's tests only.
 For the simulator an image is only OS Beroun's own files and the board's layer packed as a squashfs (no Linux is built: the simulator runs on the host's);
-it takes about a minute. The console's image, a whole Linux system, is another matter (Buildroot, the plan's stage 10). Run it where `mksquashfs` is (WSL).
+it takes about a minute. Run it where `mksquashfs` is (WSL).
 The board (default: BEROUN_BOARD_DIR, runtime/board.py) names the image: board.env's BOARD_NAME.
 """
 import argparse
@@ -127,8 +132,8 @@ def cmd_keygen(a):
 
 
 def stage_tree(dest):
-    """Copies what the system is made of into dest."""
-    files = [f for f in git("ls-files", "-z").split("\0") if f and f.split("/")[0] not in SKIP]
+    """Copies what the system is made of into dest: the files git tracks and the new ones it does not ignore (a new module that is imported must not be left out)."""
+    files = [f for f in git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ".", *[f":!{s}" for s in SKIP]).split("\0") if f and f.split("/")[0] not in SKIP]
     for rel in files:
         src = os.path.join(OS_DIR, rel)
         if not os.path.isfile(src):
@@ -216,6 +221,40 @@ def cmd_verify(a):
           + ("encrypted, opens with this device's key" if m["encrypted"] else "not encrypted"))
 
 
+def cmd_publish(a):
+    keys = imagefmt.load_keys(KEYS_JSON)
+    try:
+        m = imagefmt.verify(a.file, imagefmt.read_meta(a.file)[0]["board"], "0", keys, locked=False, device_key=imagefmt.load_device_key(ENC_KEY))
+    except imagefmt.ImageError as e:
+        sys.exit(f"REFUSED, not published: {e}")
+    dest = os.path.join(a.to, m["board"])
+    os.makedirs(dest, exist_ok=True)
+    latest = os.path.join(dest, "latest.json")
+    try:
+        old = json.load(open(latest, encoding="utf-8"))["version"]
+    except (OSError, ValueError, KeyError):
+        old = None
+    if old is not None and imagefmt.version_key(str(m["version"])) < imagefmt.version_key(str(old)) and not a.force:
+        sys.exit(f"REFUSED: the server offers {old} already, {m['version']} is older (--force)")
+    name = os.path.basename(a.file)
+    shutil.copyfile(a.file, os.path.join(dest, name) + ".part")
+    os.replace(os.path.join(dest, name) + ".part", os.path.join(dest, name))
+    with open(os.path.join(dest, name), "rb") as f:
+        digest = imagefmt.sha256_of(f, os.path.getsize(os.path.join(dest, name)))
+    info = {"version": str(m["version"]), "build": str(m["build"]), "file": name, "size": os.path.getsize(os.path.join(dest, name)), "sha256": digest, "notes": a.notes or ""}
+    json.dump(info, open(latest + ".part", "w", encoding="utf-8"), indent=1)
+    os.replace(latest + ".part", latest)   # last: the offer appears when the file is whole
+    print(f"published {name}: version {info['version']} for {m['board']} -> {dest}")
+
+
+def cmd_serve(a):
+    import functools
+    import http.server
+    h = functools.partial(http.server.SimpleHTTPRequestHandler, directory=a.dir)
+    print(f"serving {a.dir} on http://localhost:{a.port}/  (BEROUN_UPDATE_URL=http://localhost:{a.port})")
+    http.server.ThreadingHTTPServer(("127.0.0.1", a.port), h).serve_forever()
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -236,8 +275,16 @@ def main():
     v.add_argument("--locked", action="store_true")
     v.add_argument("--installed", default="0")
     v.add_argument("--device-key", default=ENC_KEY)
+    u = sub.add_parser("publish")
+    u.add_argument("file")
+    u.add_argument("--to", required=True)
+    u.add_argument("--notes")
+    u.add_argument("--force", action="store_true")
+    w = sub.add_parser("serve")
+    w.add_argument("dir")
+    w.add_argument("--port", type=int, default=8800)
     a = p.parse_args()
-    {"keygen": cmd_keygen, "build": cmd_build, "verify": cmd_verify}[a.cmd](a)
+    {"keygen": cmd_keygen, "build": cmd_build, "verify": cmd_verify, "publish": cmd_publish, "serve": cmd_serve}[a.cmd](a)
 
 
 if __name__ == "__main__":

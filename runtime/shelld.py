@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(SIM, "virtual-hardware"))
 from vhw import VirtualHardware  # noqa: E402
 import display  # noqa: E402
 import importlib  # noqa: E402
+import board  # noqa: E402
 import a2a_bridge, a2a_client, agents, androidhost, audio, appinstall, assistant, caroline, caroline_ask, caroline_update, extdisplay, extensions, extinput, extscreen, face, manifest, netctl, nativeproc, ratatosk, services, stt_checks, sw, sysapi, sysnotice, timectl, webaudio  # noqa: E402
 NET = netctl.make()
 
@@ -119,7 +120,7 @@ DATA_DIR = os.environ.get("INTELLICAT_DATA", os.path.expanduser("~/.intellicat/d
 CLOCK = timectl.make(DATA_DIR, lambda: NET.status()["online"])  # the time, the time zone and network time (runtime/timectl.py)
 MAX_READ = 1024 * 1024
 CLOSE_GRACE = 2.0  # seconds an app gets to save and answer "closed" after MODE, then it is killed
-BUTTONS = json.load(open(os.path.join(SIM, "config", "buttons.json")))
+BUTTONS = json.load(open(board.layer("buttons.json")))
 HW = VirtualHardware(STATE)
 _cd = os.path.join(STATE, "console_display")  # written by start.sh --console
 CONSOLE_DISPLAY = open(_cd).read().strip() if os.path.exists(_cd) else None

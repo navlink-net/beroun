@@ -40,7 +40,7 @@ Caroline herself is a separate project.
 | `beroun-tools/` | `beroun_*` tools: every API of the system has one for the assistant |
 | `virtual-hardware/` | `vhw.py`: the reference implementation of the hardware layer (uinput gamepad, power-supply files); a target supplies its own |
 | `native/` | Native helpers in C (browser host on WPE, talking head, splash screens) |
-| `config/` | `apps.json`, `buttons.json`, `weston.ini`, `versions.env`, audio and swap settings |
+| `config/` | `apps.json`, `versions.env` (the OS's own; the device's files are the board's layer, see [TARGETS.md](TARGETS.md)) |
 | `packages/` | Example portable package |
 | `scripts/` | Build, packaging and provisioning scripts |
 | `assistants/` | The assistant slot: descriptions of the providers (Caroline, Claude, Codex) and the build's choice |

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License.
-"""memd - the device's swap, a service of its own (config/swap.conf; docs/architecture.md, the device's memory).
+"""memd - the device's swap, a service of its own (the board's layer/swap.conf; docs/architecture.md, the device's memory).
 
   start     zram0 as swap: the zram module the device has (scripts/zram-module.sh: writeback, lz4) when it is built, else WSL's own
             (lzo-rle, no writeback: logged); a backing file on the eMMC (a loop device) when the module can write back; then the device's
@@ -19,6 +19,8 @@ import signal
 import subprocess
 import sys
 import time
+
+import board
 
 SIM = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE = os.environ.get("INTELLICAT_STATE", os.path.expanduser("~/.intellicat/run"))
@@ -48,7 +50,7 @@ def size(v):
 
 def config():
     conf = {}
-    for line in open(os.path.join(SIM, "config", "swap.conf")):
+    for line in open(board.layer("swap.conf")):
         line = line.split("#", 1)[0].strip()
         if "=" in line:   # NAME="${NAME:-default}"
             k, v = line.split("=", 1)

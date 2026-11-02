@@ -1,8 +1,0 @@
-{
-  "_comment": "Windows keyboard key (KeyboardEvent.code) -> the device button. Used by web-shell and documented in hardware.md.",
-  "ArrowUp": "up", "ArrowDown": "down", "ArrowLeft": "left", "ArrowRight": "right",
-  "KeyK": "a", "KeyL": "b", "KeyI": "x", "KeyJ": "y",
-  "KeyQ": "l1", "KeyE": "r1", "KeyZ": "l2", "KeyC": "r2",
-  "Enter": "start", "ShiftRight": "select", "Escape": "mode",
-  "KeyF": "l3", "KeyH": "r3", "KeyP": "power"
-}

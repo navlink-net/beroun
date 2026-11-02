@@ -21,7 +21,7 @@ idle-time=0
 panel-position=none
 background-color=0xff0a0f14
 
-# Weston's own on-screen keyboard is replaced by the HTML one (web-shell/osk.js), as on the console (config/weston.ini): a program that only sleeps stands in for weston-keyboard
+# Weston's own on-screen keyboard is replaced by the HTML one (web-shell/osk.js), as on the console (the board's layer/weston.ini): a program that only sleeps stands in for weston-keyboard
 [input-method]
 path=@NO_IM@
 """

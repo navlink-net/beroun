@@ -1,0 +1,285 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Notes</title>
+<meta name="viewport" content="width=640,height=480">
+<!--
+  Notes: the owner's SquirrelWisdom notes (the same as on the website), kept on the device and synchronised by notesd (manifest: services).
+  Keys: Up / Down choose, A opens, Right opens the menu of a note or folder (Left closes it), B goes up one folder, and at the top leaves.
+  In a note: B (with the keyboard hidden) saves and goes back to the list. Only the cursor, A and B have a job.
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #head { flex: none; height: 40px; line-height: 40px; padding: 0 14px; background: #000; color: #f2a900; font-size: 20px; font-weight: bold; display: flex; gap: 10px; }
+  #path { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #sync { flex: none; font-size: 14px; font-weight: normal; color: #8a949e; }
+  #sync.bad { color: #e0a030; }
+  #list { flex: 1; min-height: 0; overflow: hidden; padding: 6px 10px; position: relative; }
+  .row { display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 10px; margin-bottom: 4px; border-radius: 6px; background: #1d242b; font-size: 20px; }
+  .row.sel { background: #f2a900; color: #000; }
+  .row .ic { flex: none; width: 24px; text-align: center; }
+  .row .x { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .row .x small { display: block; font-size: 13px; opacity: .65; overflow: hidden; text-overflow: ellipsis; }
+  .row .d { flex: none; font-size: 13px; opacity: .7; }
+  .row.act { background: #26303a; }
+  .row.act.sel { background: #f2a900; }
+  .empty { padding: 30px; text-align: center; color: #6c7780; font-size: 18px; }
+  #menu { position: absolute; right: 16px; top: 8px; min-width: 220px; background: #000; border: 2px solid #f2a900; border-radius: 8px; padding: 6px; z-index: 5; }
+  #menu div { padding: 9px 12px; font-size: 19px; border-radius: 5px; }
+  #menu div.sel { background: #f2a900; color: #000; }
+  #ask { display: none; flex: none; padding: 8px 12px; background: #000; border-top: 2px solid #f2a900; }
+  #ask label { display: block; font-size: 14px; color: #8a949e; margin-bottom: 4px; }
+  #ask input { width: 100%; padding: 8px 10px; font-size: 20px; background: #1d242b; color: #fff; border: 1px solid #f2a900; border-radius: 5px; outline: 0; }
+  #edit { display: none; flex: 1; min-height: 0; }
+  #edit textarea { display: block; width: 100%; height: 100%; border: 0; outline: 0; resize: none; padding: 10px 12px; background: #111; color: #eee; font: 22px/1.35 "DejaVu Sans", sans-serif; }
+  #foot { flex: none; height: 24px; line-height: 24px; padding: 0 14px; background: #1d242b; color: #aab; font-size: 13px; white-space: nowrap; overflow: hidden; }
+</style>
+<div id="head"><span id="path"></span><span id="sync"></span></div>
+<div id="list"></div>
+<div id="edit"><textarea id="ta" spellcheck="false"></textarea></div>
+<div id="ask"><label id="askLabel"></label><input id="askIn" type="text" autocomplete="off"></div>
+<div id="foot"></div>
+<script src="/platform.js"></script>
+<script>
+  const API = '/api/app/notes/';
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  const T = s => Platform.t(s);
+
+  let folder = '', data = {folders: [], notes: [], all: [], sync: {}};
+  let rows = [], sel = 0;
+  let mode = 'list';                 // list | search | edit
+  let menu = null;                   // {i, items: [{label, run}]}
+  let picker = null;                 // {title, items: [path], i, done(path)}: where to move a note or a folder
+  let ask = null;                    // {done(text)}: the one-line prompt
+  let cur = null;                    // the open note: {id | null, text}
+  let results = [];                  // the rows of a search
+  let saveTimer = null, saving = Promise.resolve();
+
+  async function api(path, body) {
+    const r = await fetch(API + path, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  }
+
+  function dateOf(ms) {
+    const d = new Date(ms), n = new Date();
+    return d.toDateString() === n.toDateString() ? d.toTimeString().slice(0, 5) : d.toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
+  }
+
+  function syncText() {
+    const s = data.sync || {};
+    if (s.state === 'signin') return [T('Sign in to the console to sync'), true];
+    if (s.state === 'config') return [T('Sync is not set up'), true];
+    if (s.state === 'offline') return [(s.dirty ? s.dirty + ' ' : '') + T('offline'), true];
+    if (s.state === 'error') return [T('Sync failed'), true];
+    if (s.dirty) return [s.dirty + ' ' + T('to send'), false];
+    return [s.state === 'syncing' ? T('Syncing…') : '', false];
+  }
+
+  async function load() {
+    data = await api('list?folder=' + encodeURIComponent(folder));
+    mode = 'list';
+    rows = [{kind: 'new'}, {kind: 'newfolder'}, {kind: 'search'}]
+      .concat(data.folders.map(f => ({kind: 'folder', f})), data.notes.map(n => ({kind: 'note', n})));
+    sel = Math.min(sel, rows.length - 1);
+  }
+
+  function draw() {
+    const [st, bad] = syncText();
+    $('sync').textContent = st; $('sync').className = bad ? 'bad' : '';
+    $('path').textContent = mode === 'search' ? T('Search') : '≡ ' + (folder ? folder : T('Notes'));
+    const editing = mode === 'edit';
+    $('list').style.display = editing ? 'none' : 'block';
+    $('edit').style.display = editing ? 'flex' : 'none';
+    $('ask').style.display = ask ? 'block' : 'none';
+    if (!editing) {
+      const list = mode === 'search' ? results : rows;
+      let h = list.map((r, i) => {
+        const on = i === sel ? ' sel' : '';
+        if (r.kind === 'new') return `<div class="row act${on}"><span class="ic">+</span><span class="x">${T('New note')}</span></div>`;
+        if (r.kind === 'newfolder') return `<div class="row act${on}"><span class="ic">▸</span><span class="x">${T('New folder')}</span></div>`;
+        if (r.kind === 'search') return `<div class="row act${on}"><span class="ic">?</span><span class="x">${T('Search')}</span></div>`;
+        if (r.kind === 'folder') return `<div class="row${on}"><span class="ic">▸</span><span class="x">${esc(r.f.name)}</span><span class="d">${r.f.count}</span></div>`;
+        const n = r.n;
+        return `<div class="row${on}"><span class="ic">≡</span><span class="x">${esc(n.title)}${n.preview ? `<small>${esc(n.preview)}</small>` : ''}${r.where ? `<small>▸ ${esc(r.where)}</small>` : ''}</span><span class="d">${dateOf(n.updatedAt)}</span></div>`;
+      }).join('');
+      if (mode === 'search' && !results.length) h = `<div class="empty">${T('Nothing found')}</div>`;
+      if (picker) {
+        h = picker.items.map((p, i) => `<div class="row${i === picker.i ? ' sel' : ''}"><span class="ic">▸</span><span class="x">${esc(p || T('Top'))}</span></div>`).join('');
+        h = `<div class="empty" style="padding:6px">${esc(picker.title)}</div>` + h;
+      } else if (menu) {
+        h += `<div id="menu">${menu.items.map((m, i) => `<div class="${i === menu.i ? 'sel' : ''}">${esc(m.label)}</div>`).join('')}</div>`;
+      }
+      $('list').innerHTML = h;
+      const s = $('list').querySelector('.row.sel');
+      if (s) s.scrollIntoView({block: 'nearest'});
+    }
+    $('foot').textContent = editing ? T('B: save and back') : picker ? T('A: move here · B: cancel') : T('A: open · Right: menu · B: back');
+  }
+
+  // ---- asking for a line of text -------------------------------------------------------------
+  function prompt(label, value) {
+    return new Promise(res => {
+      ask = {done: res};
+      $('askLabel').textContent = label; $('askIn').value = value || '';
+      draw(); $('askIn').focus();
+    });
+  }
+  function closeAsk(v) { const a = ask; ask = null; $('askIn').blur(); draw(); a.done(v); }
+  $('askIn').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); closeAsk($('askIn').value.trim()); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAsk(null); }
+  });
+
+  function choose(title, items) {
+    return new Promise(res => { picker = {title, items, i: 0, done: res}; draw(); });
+  }
+
+  // ---- the note ------------------------------------------------------------------------------
+  function save() {
+    clearTimeout(saveTimer);
+    if (!cur) return saving;
+    const c = cur, text = $('ta').value;
+    if (c.id === null && !text.trim()) return saving;                 // an empty new note is not made
+    saving = saving.then(async () => {
+      const r = await api('save', c.id ? {id: c.id, text} : {text, folder});
+      if (c.id === null) c.id = r.id;
+    }).catch(e => { console.error('save failed', e); Platform.notify(T('Could not save the note') + ': ' + e.message, {level: 'error'}); });
+    return saving;
+  }
+  $('ta').addEventListener('input', () => { clearTimeout(saveTimer); saveTimer = setTimeout(save, 700); });
+
+  async function openNote(id) {
+    const n = id ? await api('note?id=' + encodeURIComponent(id)).catch(() => null) : {text: ''};
+    if (!n) { await load(); draw(); return; }
+    cur = {id: id || null};
+    $('ta').value = n.text; mode = 'edit'; menu = null; draw();
+    $('ta').focus(); $('ta').setSelectionRange(0, 0);
+  }
+
+  async function closeNote() {
+    await save(); cur = null; $('ta').blur();
+    await load(); draw();
+  }
+
+  // ---- menus ---------------------------------------------------------------------------------
+  async function moveNote(id) {
+    const to = await choose(T('Move to'), [''].concat(data.all));
+    if (to === null) return;
+    await api('move', {id, folder: to}); await load(); draw();
+  }
+
+  function openMenu(r) {
+    if (r.kind === 'note') {
+      menu = {i: 0, items: [
+        {label: T('Open'), run: () => openNote(r.n.id)},
+        {label: T('Move…'), run: () => moveNote(r.n.id)},
+        {label: T('Delete'), run: async () => {
+          const a = await Platform.messageBox({title: T('Delete the note?'), text: r.n.title, kind: 'yesno', icon: 'warning', default: 1});
+          if (a.index === 0) { await api('delete', {id: r.n.id}); sel = Math.max(0, sel - 1); }
+        }}]};
+    } else if (r.kind === 'folder') {
+      menu = {i: 0, items: [
+        {label: T('Open'), run: () => { folder = r.f.path; sel = 0; }},
+        {label: T('Rename'), run: async () => {
+          const name = await prompt(T('New name'), r.f.name);
+          if (name) await api('folder', {op: 'rename', path: r.f.path, to: (folder ? folder + '/' : '') + name.replace(/\//g, '-')});
+        }},
+        {label: T('Delete'), run: async () => {
+          const a = await Platform.messageBox({title: T('Delete the folder?'), text: r.f.name + ' (' + r.f.count + ')', kind: 'yesno', icon: 'warning', default: 1});
+          if (a.index === 0) { await api('folder', {op: 'delete', path: r.f.path}); sel = Math.max(0, sel - 1); }
+        }}]};
+    } else return;
+    draw();
+  }
+
+  async function activate(r) {
+    if (r.kind === 'new') return openNote(null);
+    if (r.kind === 'note') return openNote(r.n.id);
+    if (r.kind === 'folder') { folder = r.f.path; sel = 0; await load(); return draw(); }
+    if (r.kind === 'newfolder') {
+      const name = await prompt(T('Folder name'), '');
+      if (name) { await api('folder', {op: 'create', path: (folder ? folder + '/' : '') + name.replace(/\//g, '-')}); await load(); }
+      return draw();
+    }
+    if (r.kind === 'search') {
+      const q = await prompt(T('Search'), '');
+      if (q) { const s = await api('search?q=' + encodeURIComponent(q)); results = s.notes.map(n => ({kind: 'note', n, where: n.folder})); mode = 'search'; sel = 0; }
+      return draw();
+    }
+  }
+
+  // ---- keys ----------------------------------------------------------------------------------
+  addEventListener('keydown', async e => {
+    if (ask) return;                                     // the field handles its own keys
+    if (mode === 'edit') {
+      if (e.key === 'Escape') { e.preventDefault(); await closeNote(); }
+      else if (e.key === 'Enter' && document.activeElement !== $('ta')) { e.preventDefault(); $('ta').focus(); }
+      return;
+    }
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape'].includes(e.key)) return;
+    e.preventDefault();
+    try {
+      if (picker) {
+        if (e.key === 'ArrowUp') picker.i = Math.max(0, picker.i - 1);
+        else if (e.key === 'ArrowDown') picker.i = Math.min(picker.items.length - 1, picker.i + 1);
+        else if (e.key === 'Enter' || e.key === 'Escape') { const p = picker; picker = null; p.done(e.key === 'Enter' ? p.items[p.i] : null); }
+      } else if (menu) {
+        if (e.key === 'ArrowUp') menu.i = Math.max(0, menu.i - 1);
+        else if (e.key === 'ArrowDown') menu.i = Math.min(menu.items.length - 1, menu.i + 1);
+        else if (e.key === 'ArrowLeft' || e.key === 'Escape') menu = null;
+        else if (e.key === 'Enter') { const m = menu.items[menu.i]; menu = null; draw(); await m.run(); await load(); }
+      } else {
+        const list = mode === 'search' ? results : rows;
+        if (e.key === 'ArrowUp') sel = Math.max(0, sel - 1);
+        else if (e.key === 'ArrowDown') sel = Math.min(list.length - 1, sel + 1);
+        else if (e.key === 'ArrowRight' && list[sel]) openMenu(list[sel]);
+        else if (e.key === 'Enter' && list[sel]) await activate(list[sel]);
+        else if (e.key === 'Escape') {
+          if (mode === 'search') { mode = 'list'; sel = 0; }
+          else if (folder) { folder = folder.split('/').slice(0, -1).join('/'); sel = 0; await load(); }
+          else { await Platform.state.set({}).catch(() => {}); return Platform.exit(); }
+        }
+      }
+    } catch (err) { console.error(err); Platform.notify(err.message, {level: 'error'}); await load().catch(() => {}); }
+    draw();
+  });
+
+  // a touch or a mouse does what A does on the row
+  $('list').addEventListener('click', async e => {
+    const el = e.target.closest('.row'); if (!el || menu || picker || mode === 'edit') return;
+    const i = [...$('list').querySelectorAll('.row')].indexOf(el);
+    if (i < 0) return;
+    sel = i; draw(); await activate((mode === 'search' ? results : rows)[i]).catch(() => {}); draw();
+  });
+
+  Platform.onClose(async () => {
+    await save();
+    await Platform.state.set({folder, id: mode === 'edit' && cur ? cur.id : null}).catch(() => {});
+  });
+
+  // the list follows what Caroline or the other devices changed
+  setInterval(() => { if (mode === 'list' && !menu && !picker && !ask) load().then(draw).catch(() => {}); }, 5000);
+
+  // Caroline's tools for this page (manifest: "caroline")
+  Platform.tools.handle('open_note', async a => { await closeNoteQuiet(); await openNote(String(a.id)); return mode === 'edit' ? 'the note is open' : 'no such note'; });
+  Platform.tools.handle('open_folder', async a => { await closeNoteQuiet(); folder = String(a.folder || '').replace(/^\/+|\/+$/g, ''); sel = 0; mode = 'list'; await load(); draw(); return 'showing ' + (folder || 'the top'); });
+  async function closeNoteQuiet() { if (mode === 'edit') await save(); cur = null; menu = picker = null; mode = 'list'; }
+
+  (async () => {
+    const st = await Platform.state.get().catch(() => null);
+    if (st && typeof st.folder === 'string') folder = st.folder;
+    const arg = await Platform.launchArg().catch(() => null);
+    await load().catch(() => { folder = ''; return load().catch(() => {}); });
+    draw();
+    if (arg && arg.id) await openNote(arg.id);
+    else if (st && st.id) await openNote(st.id);
+  })();
+
+  // keep the text above the on-screen keyboard
+  addEventListener('osk', e => { $('edit').style.height = mode === 'edit' ? (innerHeight - 40 - 24 - e.detail.height) + 'px' : ''; });
+</script>

@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "id": "notes",
+  "name": "Notes",
+  "version": "1.0.0",
+  "permissions": ["account.session", "caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "tile": {"order": 21},
+  "capabilities": [{"name": "Network"}],
+  "services": [
+    {"id": "notesd", "name": "Notes of the account, kept on the device", "host": "process", "cmd": ["python3", "{app}/notesd.py", "{port}"], "port": 48804,
+     "start": "system", "required_by": ["notes"], "priority": 50, "memory_mb": 20, "sleep": true}
+  ],
+  "endpoints": [
+    {"path": "list", "methods": ["GET"], "service": "notesd"},
+    {"path": "search", "methods": ["GET"], "service": "notesd"},
+    {"path": "note", "methods": ["GET"], "service": "notesd"},
+    {"path": "status", "methods": ["GET"], "service": "notesd"},
+    {"path": "save", "methods": ["POST"], "service": "notesd"},
+    {"path": "delete", "methods": ["POST"], "service": "notesd"},
+    {"path": "move", "methods": ["POST"], "service": "notesd"},
+    {"path": "folder", "methods": ["POST"], "service": "notesd"},
+    {"path": "sync", "methods": ["POST"], "service": "notesd"}
+  ],
+  "caroline": {
+    "description": "The owner's SquirrelWisdom notes (synced with the account and the website): list, search, read, write, move and delete notes and folders, with the app closed",
+    "skills": ["skills"],
+    "mcp": [
+      {"id": "notes", "transport": "stdio", "cmd": ["python3", "{app}/notes_mcp.py", "{port}"], "service": "notesd"}
+    ],
+    "tools": [
+      {"name": "open_note", "description": "Shows a note on the screen", "input": {"id": "string"}},
+      {"name": "open_folder", "description": "Shows a folder ('' is the top) on the screen", "input": {"folder": "string"}}
+    ]
+  }
+}

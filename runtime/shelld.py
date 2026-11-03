@@ -1368,13 +1368,90 @@ def sleep_toggle(want=None):
         return {"asleep": POWER["asleep"]}
 
 
+# ---- the screen: video and screenshots (the Video Recorder's service screenrecd does the work, apps/video-recorder) -------------------------------------
+# START + R1 starts a recording and the same press ends it; START + R2 takes a screenshot. The R1 / R2 of such a press belongs to the system: it reaches no app and
+# R2 does not wake Caroline. The consoles draw the frame around the screen from what the service reports: red, blinking at 2 Hz, while a recording runs; blue for half a
+# second when a picture was taken ({"t": "screen", "rec": bool} and {"t": "screen", "shot": true} on /ws). The same is open to automation: GET /api/screen,
+# POST /api/screen/record {on?}, POST /api/screen/shot.
+SCREEN = {"rec": False}
+_held = set()       # buttons that are down and matter for a combo
+_combo = set()      # R1 / R2 that began a combo: their release is the system's too
+
+
+def screen_call(path, body=None):
+    svc = SERVICES.services.get("screenrecd")
+    if not svc or not svc.port:
+        return {"error": "the screen recorder is not running", "kind": "unavailable"}, 503
+    req = urllib.request.Request(f"http://127.0.0.1:{svc.port}/{path}", data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read() or b"{}"), r.status
+    except urllib.error.HTTPError as e:
+        return json.loads(e.read() or b"{}"), e.code
+    except OSError as e:
+        return {"error": f"the screen recorder does not answer: {e}", "kind": "unavailable"}, 503
+
+
+def screen_status():
+    st, code = screen_call("status")
+    return dict(st, recording=st.get("state") == "recording") if code == 200 else st
+
+
+def screen_record(on=None):
+    """Start (on true), stop (false) or toggle (None) the recording of the screen."""
+    st, code = screen_call("status")
+    if code != 200:
+        return st, code
+    if on is None:
+        on = st.get("state") == "idle"
+    if on and st.get("state") != "idle":
+        return {"ok": True, "state": st["state"]}, 200
+    if not on and st.get("state") == "idle":
+        return {"ok": True, "state": "idle"}, 200
+    return screen_call("start", {"delay": 0, "audio": True}) if on else screen_call("stop", {})
+
+
+def screen_shot():
+    return screen_call("shot", {})
+
+
+def screen_combo(name):
+    """The work of START + R1 / START + R2, off the input thread (a screenshot and the end of a recording take a moment)."""
+    def run():
+        r, code = screen_record() if name == "r1" else screen_shot()
+        ilog(f"screen: START + {name.upper()} -> {code} {json.dumps(r)[:200]}")
+        if code >= 400:
+            notify(r.get("error", "the screen could not be captured"), "Screen", "error")
+    threading.Thread(target=run, daemon=True).start()
+
+
+def combo_filter(name, on):
+    """True when this button event is part of a screen combo and belongs to the system alone."""
+    if name == "start":
+        (_held.add if on else _held.discard)(name)
+        return False
+    if name in ("r1", "r2"):
+        if on and "start" in _held:
+            _combo.add(name)
+            screen_combo(name)
+            return True
+        if not on and name in _combo:
+            _combo.discard(name)
+            return True
+    return False
+
+
 def hw_button(name, on):
+    """Returns True when the system took the button (a screen combo): it is not passed on to an app."""
     if asleep() and name != "power":
-        return  # asleep: the power key is the only one that is heard
+        return False  # asleep: the power key is the only one that is heard
     LAST_INPUT["t"] = time.time()
+    if combo_filter(name, on):
+        return True
     if name == "power":
         HW.power_key(on)  # powerd reads it (short press: sleep and wake, long press: power off)
-        return
+        return False
     try:
         HW.button(name, on)
     except RuntimeError:
@@ -1385,6 +1462,7 @@ def hw_button(name, on):
         start_button()
     elif name in ("l1", "l2"):
         volume_button(name == "l2", on)
+    return False
 
 
 def request_close(pid, app_id):
@@ -2464,7 +2542,7 @@ class H(BaseHTTPRequestHandler):
         # hidden apps (test/demo) are not listed but stay launchable by id
         routes = {"/api/apps": lambda: [dict(a, badge=BADGES[a["id"]]) if BADGES.get(a["id"]) else a for a in APPS if not a.get("hidden") and not assistant_view_hidden(a["id"])],
                   "/api/running": running, "/api/hw": HW.state,
-                  "/api/buttons": lambda: BUTTONS, "/api/flash": FLASH.status, "/api/update": UPDATER.status, "/api/usb": lambda: {"connected": FLASH.usb}, "/api/health": lambda: {"ok": True, "socket": SOCKET, "consoles": CONSOLES["n"]}}
+                  "/api/buttons": lambda: BUTTONS, "/api/screen": screen_status, "/api/flash": FLASH.status, "/api/update": UPDATER.status, "/api/usb": lambda: {"connected": FLASH.usb}, "/api/health": lambda: {"ok": True, "socket": SOCKET, "consoles": CONSOLES["n"]}}
         if path in routes:
             return self._json(routes[path]())
         if path == "/api/notifications":
@@ -2632,6 +2710,8 @@ class H(BaseHTTPRequestHandler):
             CONSOLES["conns"].append(self)
         if OSK_TYPING["on"]:
             _push([self], {"t": "typing", "on": True})
+        if SCREEN["rec"]:
+            _push([self], {"t": "screen", "rec": True})
         last_down = None
         for text in display.ws_messages(self):
             try:
@@ -2652,10 +2732,10 @@ class H(BaseHTTPRequestHandler):
                     if not asleep() and not (osk_up() and m["name"] in ("up", "down", "left", "right", "a", "b")) and EXTIN.route(m["name"], m["on"]):   # SELECT moves the focus; with it on the external screen the cursor, A, B, X, Y are for that screen
                         LAST_INPUT["t"] = time.time()
                         continue
-                    hw_button(m["name"], m["on"])
+                    taken = hw_button(m["name"], m["on"])
                     if m["name"] == "mode" and m["on"] and not asleep():
                         home()
-                    if XIN and not asleep() and m["name"] not in SYSTEM_BUTTONS:  # the volume, power and Caroline buttons never reach an app
+                    if XIN and not asleep() and not taken and m["name"] not in SYSTEM_BUTTONS:  # the volume, power and Caroline buttons never reach an app
                         XIN.key(m["name"], m["on"])
                 elif t == "stick" and not asleep():
                     ext_stick_log(m["which"], m["x"], m["y"])
@@ -2933,6 +3013,20 @@ class H(BaseHTTPRequestHandler):
                 if changed:
                     ilog(f"osk: a field {'has' if on else 'no longer has'} the focus, the PC's keyboard {'types' if on else 'is the buttons again'}")
                     _push(conns, {"t": "typing", "on": on})
+                return self._json({"ok": True})
+            if self.path == "/api/screen/record":   # automation: start (on true), stop (false) or toggle the recording of the screen
+                r, code = screen_record(body.get("on") if isinstance(body, dict) and isinstance(body.get("on"), bool) else None)
+                return self._json(r, code)
+            if self.path == "/api/screen/shot":      # automation: a screenshot
+                r, code = screen_shot()
+                return self._json(r, code)
+            if self.path == "/api/screen/frame":     # from screenrecd: the recording began or ended ({rec}), a picture was taken ({shot: true})
+                if isinstance(body, dict):
+                    if isinstance(body.get("rec"), bool):
+                        SCREEN["rec"] = body["rec"]
+                    with lock:
+                        conns = list(CONSOLES["conns"])
+                    _push(conns, dict({"t": "screen"}, **{k: v for k, v in body.items() if k in ("rec", "shot")}))
                 return self._json({"ok": True})
             if self.path == "/api/hw/button":
                 hw_button(body["name"], bool(body["pressed"]))

@@ -10,7 +10,8 @@ TOOLS = [
     ("start_recording", "Starts recording the screen. delay: seconds before it starts (0..10, default 0); audio: also record the sound the console plays (default true)", {"delay": "number", "audio": "boolean"},
      lambda a: call("POST", "start", a)),
     ("stop_recording", "Stops the recording and saves the file (Videos/Screen-<date>.mp4 on the SD card)", {}, lambda a: call("POST", "stop", {})),
-    ("list_recordings", "The saved screen recordings, newest first: name, path on the SD card, bytes, time", {}, lambda a: call("GET", "list")),
+    ("take_screenshot", "Takes a screenshot of the screen now (Pictures/Screenshot-<date>.png on the SD card)", {}, lambda a: call("POST", "shot", {})),
+    ("list_recordings", "The saved screen recordings and screenshots, newest first: name, kind (video | image), path on the SD card, bytes, time", {}, lambda a: call("GET", "list")),
 ]
 
 

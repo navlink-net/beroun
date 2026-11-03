@@ -38,6 +38,7 @@
   const size = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
   const rows = () => {
     const r = [{k: 'go', n: Platform.t(st.state === 'idle' ? 'Start recording' : 'Stop recording')}];
+    r.push({k: 'shot', n: Platform.t('Screenshot'), v: 'START + R2'});
     if (st.sound) r.push({k: 'sound', n: Platform.t('Sound'), v: Platform.t(sound ? 'On' : 'Off')});
     r.push({k: 'delay', n: Platform.t('Delay'), v: delay ? delay + ' s' : Platform.t('None')});
     r.push({k: 'list', n: Platform.t('Recordings'), v: files.length ? String(files.length) : ''});
@@ -46,8 +47,8 @@
   function draw() {
     const body = document.getElementById('body');
     if (view === 'list') {
-      body.innerHTML = `<div id="list">${files.length ? files.map((f, i) => `<div class="row item${i === fsel ? ' sel' : ''}"><span class="n">${esc(f.name)}</span><span class="v">${size(f.bytes)}</span></div>`).join('')
-        : `<div class="sub">${Platform.t('No recordings yet')}</div>`}</div><div class="sub">${esc(msg)}</div><div class="hint">↑/↓ · A ${Platform.t('play')} · B ${Platform.t('back')}</div>`;
+      body.innerHTML = `<div id="list">${files.length ? files.map((f, i) => `<div class="row item${i === fsel ? ' sel' : ''}"><span class="n">${esc(f.name)}</span><span class="v">${f.kind === 'image' ? '▣ ' : ''}${size(f.bytes)}</span></div>`).join('')
+        : `<div class="sub">${Platform.t('No recordings yet')}</div>`}</div><div class="sub">${esc(msg)}</div><div class="hint">↑/↓ · A ${Platform.t('open')} · B ${Platform.t('back')}</div>`;
       const s = body.querySelector('.sel'); if (s) s.scrollIntoView({block: 'nearest'});
       return;
     }
@@ -58,7 +59,7 @@
     sel = Math.min(sel, r.length - 1);
     body.innerHTML = `<div class="big${rec ? ' rec' : ''}">${esc(big)}</div><div class="sub">${esc(sub)}</div>` +
       r.map((x, i) => `<div class="row${i === sel ? ' sel' : ''}${x.k === 'go' && !st.can_record ? ' dim' : ''}"><span class="n">${esc(x.n)}</span><span class="v">${esc(x.v || '')}</span></div>`).join('') +
-      `<div class="hint">↑/↓ ${Platform.t('choose')} · ←/→ ${Platform.t('change')} · A · B ${Platform.t('exit')}</div>`;
+      `<div class="hint">↑/↓ ${Platform.t('choose')} · ←/→ ${Platform.t('change')} · A · B ${Platform.t('exit')} · START+R1 ${Platform.t('video')}</div>`;
   }
   async function refresh() {
     try { st = await get('status'); } catch (e) { st = Object.assign(st, {can_record: false}); }
@@ -79,6 +80,11 @@
         msg = r.error ? r.error : Platform.t('Saved') + ': ' + r.file.replace(/^.*\//, '') + ' · ' + size(r.bytes || 0) + ' · ' + clock(r.seconds || 0);
         await refresh();
       }
+    } else if (k === 'shot') {
+      if (!st.can_record) return;
+      const r = await post('shot');
+      msg = r.error ? r.error : Platform.t('Saved') + ': ' + r.file.replace(/^.*\//, '');
+      await refresh();
     } else if (k === 'sound') { sound = !sound; draw(); }
     else if (k === 'delay') { delay = DELAYS[(DELAYS.indexOf(delay) + 1) % DELAYS.length]; draw(); }
     else if (k === 'list') { view = 'list'; fsel = 0; msg = ''; await refresh(); }

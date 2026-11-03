@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License.
 """screenrecd: the backend of the Video Recorder app (a service of OS Beroun, see manifest.json). It records the console's screen into an MP4 on the SD card
-(<home>/Videos/Screen-YYYY-MM-DD-HHMMSS.mp4) and survives the close of the app, so the recording goes on while another app is on the screen.
+(<home>/Videos/Screen-YYYY-MM-DD-HHMMSS.mp4) and survives the close of the app, so the recording goes on while another app is on the screen. It also takes
+screenshots (<home>/Pictures/Screenshot-YYYY-MM-DD-HHMMSS.png). The service runs from the start of the system: START + R1 (video) and START + R2 (screenshot) are
+handled by the shell, which calls it (POST /api/screen/record, /api/screen/shot), and it tells the shell when a recording begins or ends and when a picture is taken
+(POST /api/screen/frame), so a console can draw its red blinking frame (recording) and the blue half-second frame (screenshot).
 
 The picture is the one shelld streams to the console window: the display in <state>/console_display, grabbed by ffmpeg (x11grab) and encoded as H.264; the sound is
 what the console plays (the monitor of the default PulseAudio sink) as AAC, when there is such a source. The file is fragmented MP4, so it plays even if the
 service is killed in the middle. Without a display to grab (a device whose compositor has no such source) the service says so (`can_record` false) and refuses to start.
-Endpoints (passed on by the shell as /api/app/video-recorder/<path>): GET status, GET list, POST start {delay?, audio?}, POST stop.
+Endpoints (passed on by the shell as /api/app/video-recorder/<path>): GET status, GET list, POST start {delay?, audio?}, POST stop, POST shot.
 """
 import datetime as dt, json, os, shutil, signal, subprocess, sys, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +19,7 @@ SHELL = f"http://127.0.0.1:{os.environ.get('INTELLICAT_PORT', '8765')}"
 STATE = os.environ.get("INTELLICAT_STATE", os.path.expanduser("~/.intellicat/run"))
 HOME = os.environ.get("INTELLICAT_HOME", "/media/sdcard")
 FOLDER = "Videos"
+PICTURES = "Pictures"
 SIZE, FPS = os.environ.get("RECORDER_SIZE", "640x480"), 30
 MAX_S = 30 * 60              # one recording ends by itself after this long
 MIN_FREE = 200 * 1024 * 1024  # no recording starts on a card with less room than this
@@ -31,6 +35,11 @@ def shell(path, body):
             return json.loads(r.read() or b"{}")
     except OSError:
         return {}
+
+
+def frame(**state):
+    """Tells the shell what the screen frame of a console shows: rec true / false, shot true (once)."""
+    shell("/api/screen/frame", state)
 
 
 def notify(text, level="info"):
@@ -76,17 +85,38 @@ def status():
 
 
 def listing():
-    d = out_dir()
+    """The videos and the screenshots, newest first."""
     items = []
-    try:
-        for n in os.listdir(d):
-            if n.lower().endswith(".mp4"):
-                st = os.stat(os.path.join(d, n))
-                items.append({"name": n, "path": f"{FOLDER}/{n}", "bytes": st.st_size, "mtime": int(st.st_mtime)})
-    except OSError:
-        pass
+    for folder, ext, kind in ((FOLDER, ".mp4", "video"), (PICTURES, ".png", "image")):
+        d = os.path.join(HOME, folder)
+        try:
+            for n in os.listdir(d):
+                if n.lower().endswith(ext) and n.startswith(("Screen-", "Screenshot-")):
+                    st = os.stat(os.path.join(d, n))
+                    items.append({"name": n, "path": f"{folder}/{n}", "kind": kind, "bytes": st.st_size, "mtime": int(st.st_mtime)})
+        except OSError:
+            pass
     items.sort(key=lambda i: i["mtime"], reverse=True)
     return items
+
+
+def shot():
+    """One picture of the screen as a PNG on the card."""
+    if not can_record():
+        return {"error": "this screen cannot be captured here (no display to grab, or no ffmpeg)", "kind": "unsupported"}, 501
+    d = os.path.join(HOME, PICTURES)
+    os.makedirs(d, exist_ok=True)
+    if shutil.disk_usage(d).free < 20 * 1024 * 1024:
+        return {"error": "not enough room on the card", "kind": "no_space"}, 507
+    name = f"Screenshot-{now_text()}.png"
+    path = os.path.join(d, name)
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "x11grab", "-video_size", SIZE, "-draw_mouse", "0", "-i", display(), "-frames:v", "1", path],
+                       capture_output=True, text=True, timeout=20)
+    if r.returncode != 0 or not os.path.exists(path):
+        return {"error": (r.stderr.strip().splitlines() or ["the grab failed"])[-1], "kind": "failed"}, 500
+    frame(shot=True)
+    notify("Screenshot saved: " + name)
+    return {"ok": True, "file": f"{PICTURES}/{name}", "bytes": os.path.getsize(path)}, 200
 
 
 def _begin(audio):
@@ -117,6 +147,7 @@ def _begin(audio):
         REC["timer"] = threading.Timer(MAX_S, stop, kwargs={"why": "the time limit"})
         REC["timer"].daemon = True
         REC["timer"].start()
+    frame(rec=True)
     notify("Screen recording started")
 
 
@@ -129,6 +160,7 @@ def _watch(proc, path):
             REC.update(state="idle", proc=None, error=(err.splitlines()[-1] if err else "the recorder stopped"))
             if REC["timer"]:
                 REC["timer"].cancel()
+    frame(rec=False)
     if err:
         notify("Screen recording stopped: " + err.splitlines()[-1], "error")
 
@@ -180,6 +212,7 @@ def stop(why=""):
             proc.kill()
     path = os.path.join(HOME, name)
     size = os.path.getsize(path) if os.path.exists(path) else 0
+    frame(rec=False)
     notify("Screen recording saved: " + os.path.basename(name) + (f" ({why})" if why else ""))
     return {"ok": True, "file": name, "bytes": size, "seconds": int(time.time() - started)}, 200
 
@@ -215,6 +248,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(r, code)
         if p == "stop":
             r, code = stop()
+            return self._send(r, code)
+        if p == "shot":
+            r, code = shot()
             return self._send(r, code)
         self._send({"error": "no such path"}, 404)
 

@@ -1373,7 +1373,12 @@ def hw_button(name, on):
     if name == "power":
         HW.power_key(on)  # powerd reads it (short press: sleep and wake, long press: power off)
         return
-    HW.button(name, on)
+    try:
+        HW.button(name, on)
+    except RuntimeError:
+        if not androidhost.SPEC:
+            raise
+        # a phone has no uinput (no virtual gamepad to feed): its buttons reach the pages as keys through the keyboard of OS Beroun, the rest is done below
     if name == "r2" and on:
         start_button()
     elif name in ("l1", "l2"):
@@ -2927,7 +2932,11 @@ class H(BaseHTTPRequestHandler):
                     home()
                 return self._json({"ok": True})
             if self.path == "/api/hw/stick":
-                HW.stick(body["which"], float(body["x"]), float(body["y"]))
+                try:
+                    HW.stick(body["which"], float(body["x"]), float(body["y"]))
+                except RuntimeError:
+                    if not androidhost.SPEC:
+                        raise   # on a phone there is no uinput: the pages get the stick from the shell's gamepad
                 EXTIN.stick(body["which"], float(body["x"]), float(body["y"]))
                 return self._json({"ok": True})
             if self.path == "/api/hw/touch":

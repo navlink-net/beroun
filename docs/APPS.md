@@ -28,6 +28,7 @@ Any app may also declare services, endpoints, a big page for the external displa
 | Store (system) | Install/update/remove apps; permission `apps.manage` |
 | Communicator | Mail, WhatsApp, Telegram, Signal, Slack in one style; backend is Caroline's message store (`ic_messaging`) |
 | Notes | The owner's SquirrelWisdom notes (the same as on the website), kept on the device and synced by `notesd` (permission `account.session`; key `notes_key` in `keys.json`); Caroline's own `Caroline:*` folders are hidden |
+| Books | FB2 reader for the SquirrelWisdom library (public and own books), parsed and kept on the device by `booksd` (permission `account.session`; key `books_key` in `keys.json`, only to learn the account folder); the place of reading is kept per book; local `.fb2` files from Files come later |
 | Files, Notepad, Calculator | File manager (`opens` maps file types to apps), plain-text notes, calculator |
 | Music, Video | Players with a remembered place; WPE needs a user gesture before sound |
 | Calendar (`calendard`), Clock (`alarmd`) | Services that ring in sleep |

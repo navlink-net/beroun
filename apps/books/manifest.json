@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "id": "books",
+  "name": "Books",
+  "version": "1.0.0",
+  "permissions": ["account.session", "caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "tile": {"order": 22},
+  "capabilities": [{"name": "Network"}],
+  "services": [
+    {"id": "booksd", "name": "FB2 books of the account, kept on the device", "host": "process", "cmd": ["python3", "{app}/booksd.py", "{port}"], "port": 48805,
+     "start": "open", "required_by": ["books"], "priority": 50, "memory_mb": 60}
+  ],
+  "endpoints": [
+    {"path": "catalog", "methods": ["GET"], "service": "booksd"},
+    {"path": "recent", "methods": ["GET"], "service": "booksd"},
+    {"path": "book", "methods": ["GET"], "service": "booksd"},
+    {"path": "text", "methods": ["GET"], "service": "booksd"},
+    {"path": "find", "methods": ["GET"], "service": "booksd"},
+    {"path": "status", "methods": ["GET"], "service": "booksd"},
+    {"path": "progress", "methods": ["POST"], "service": "booksd"}
+  ],
+  "caroline": {
+    "description": "The books of SquirrelWisdom (the public library and the owner's own, FB2): find a book, read its text, search in it, know where the owner stopped, with the app closed",
+    "skills": ["skills"],
+    "mcp": [
+      {"id": "books", "transport": "stdio", "cmd": ["python3", "{app}/books_mcp.py", "{port}"], "service": "booksd"}
+    ],
+    "tools": [
+      {"name": "open_book", "description": "Opens a book in the reader at the place the owner stopped", "input": {"id": "string", "scope": "string"}},
+      {"name": "where_am_i", "description": "Which book is open and at which chapter", "input": {}},
+      {"name": "page_text", "description": "The text of the page the owner sees now", "input": {}}
+    ]
+  }
+}

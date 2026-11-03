@@ -4,7 +4,7 @@
 Follows Caroline (backend-py/app/plugins/sw_api.py, login_api.py, voice_api.py): the same account and the
 same credentials file (~/.mcp-notes/credentials.json, {"email", "password"}), a v2 session minted with
 `user:verify`, speech recognition through `ai:stt`. The service keys are not part of this repository: they
-come from ~/.intellicat/keys.json {"login_key", "stt_key", "notes_key" (the Notes app's service, apps/notes/notesd.py)} (or INTELLICAT_SW_LOGIN_KEY / INTELLICAT_SW_STT_KEY); the optional technical login (key_login) from the same file.
+come from ~/.intellicat/keys.json {"login_key", "stt_key", "notes_key" (the Notes app's service, apps/notes/notesd.py), "books_key" (the Books app's service, apps/books/booksd.py)} (or INTELLICAT_SW_LOGIN_KEY / INTELLICAT_SW_STT_KEY); the optional technical login (key_login) from the same file.
 """
 import base64, json, os, threading, urllib.error, urllib.request
 

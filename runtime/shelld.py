@@ -110,6 +110,8 @@ def scan_apps(root=None, descriptor="manifest.json", prefix="apps", only=None):
             app["hidden"] = True
         if m.get("order") is not None:  # place among the tiles: smaller is earlier (Caroline's text chat is the first, top-left)
             app["order"] = int(m["order"])
+        if m.get("folder"):  # the launcher shows the app inside this folder (a tile of its own on the home grid), not on the grid itself
+            app["folder"] = m["folder"]
         if m.get("window") == "shared":  # its frontend lives in the shared window (the launcher's cog), one frontend at a time; otherwise a cog of its own
             app["window"] = "shared"
         if m.get("microphone"):

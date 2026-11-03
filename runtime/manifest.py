@@ -5,7 +5,7 @@
      "frontend": {"entry": "index.html", "window": "shared"},        # a web page: "entry" (in the app's folder) or "url" (another origin); window: shared | own;
                                                                     #   optional "microphone", "transparent"
      "native":   {"cmd": ["ic-browser", "..."], "page": "p.html", "host": "browser"},    # instead of a frontend: a program of its own ({port}, {sim} are filled in); "page": its stand-in where it cannot run (Android); "host": the Kotlin host's own view that shows that page there (browser: tabs of WebViews under the page)
-     "tile":     {"order": 0, "hidden": true},                        # the launcher: place among the tiles; hidden: launched by the system, no tile
+     "tile":     {"order": 0, "hidden": true, "folder": "system-utilities"},   # the launcher: place among the tiles; hidden: launched by the system, no tile; folder: the app is in that folder, not on the home grid
      "system":   true,                                               # a system app of OS Beroun (Browser, Settings, ...): the store can update it, never remove it or install it
      "beroun":   "1.0",                                              # the lowest version of OS Beroun (its system API) the app needs; a store package must have it
      "capabilities": [{"name": "Microphone", "scope": {"required": true}}, {"name": "ExternalDisplay"}],   # what of the device the app uses (docs/app-format.md): CATalogue's {name, scope}
@@ -34,7 +34,7 @@ TOP = {"format", "id", "name", "version", "icon", "frontend", "native", "tile", 
 TARGETS = ("linux-arm64", "linux-x86_64", "android-arm64", "android-x86_64")   # <os>-<cpu>: the console, the simulators, the phones, the emulator
 BIN_REF = re.compile(r"\{bin:([a-z][a-z0-9_-]*)\}")
 FRONTEND = {"entry", "url", "window", "microphone", "transparent"}
-TILE = {"order", "hidden"}
+TILE = {"order", "hidden", "folder"}
 EXTERNAL = {"entry", "url", "cmd", "env", "state", "input"}   # the page of the app for the external (HDMI) screen, docs/system-api.md
 CAROLINE = {"description", "skills", "mcp", "tools"}
 MCP = {"id", "transport", "cmd", "url", "env", "service"}
@@ -118,7 +118,9 @@ def validate(m, folder=None, system=False):
             e.append("native.host is \"browser\" and needs native.page")
     tile = m.get("tile", {})
     if not isinstance(tile, dict) or set(tile) - TILE or ("order" in tile and not isinstance(tile["order"], int)) or ("hidden" in tile and not isinstance(tile["hidden"], bool)):
-        e.append("tile must be {\"order\": int, \"hidden\": bool}")
+        e.append("tile must be {\"order\": int, \"hidden\": bool, \"folder\": id}")
+    elif "folder" in tile and not (isinstance(tile["folder"], str) and re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", tile["folder"])):
+        e.append("tile.folder must be a folder id (lowercase, digits, -)")
     if "state" in m and not isinstance(m["state"], bool):
         e.append("state must be true or false")
     if "system" in m and not isinstance(m["system"], bool):
@@ -604,4 +606,6 @@ def normalize(m):
         flat["hidden"] = True
     if "order" in tile:
         flat["order"] = tile["order"]
+    if tile.get("folder"):
+        flat["folder"] = tile["folder"]
     return flat

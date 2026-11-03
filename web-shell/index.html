@@ -45,6 +45,10 @@
   /* an app being moved: lifted over the grid */
   .tile.lift { z-index: 3; transform: scale(.9); opacity: .92; outline: 5px solid #f2a900; outline-offset: -5px;
                box-shadow: 0 8px 22px rgba(0, 0, 0, .65); pointer-events: none; }
+  .tile .mini { width: 84px; height: 84px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 6px; box-sizing: border-box; background: rgba(0,0,0,.28); border-radius: 10px; pointer-events: none; }
+  .tile .mini.one { grid-template-columns: 1fr; }
+  .tile .mini img { width: 100%; height: 100%; }
+  .tile .mini span { display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 22px; background: rgba(255,255,255,.22); border-radius: 5px; }
   .tile .glyph { font-size: 64px; line-height: 1; font-weight: bold; }
   .tile img { width: 72px; height: 72px; object-fit: contain; pointer-events: none; }
   /* "more beyond this edge": a small arrow over the grid (dots looked like a handle to drag); a tap on it scrolls one cell that way */
@@ -183,9 +187,57 @@ function textColor(hex) {
 // Where each app stands is the user's: an app is moved by a long press and a drag, or by SELECT, the D-pad and SELECT again (MODE takes it
 // back); the places are kept in the launcher's store as {app id: [column, row]}, and an app that has no place yet takes the first free cell.
 const LONG = 500;   // ms: a long press
-let apps = [], places = {}, at = {}, cols = MIN_COLS, rows = MIN_ROWS, gc = MIN_COLS + 1, gr = MIN_ROWS + 1, cells = [], tiles = [],
+let all = [], folder = null, topAt = null, apps = [], places = {}, at = {}, cols = MIN_COLS, rows = MIN_ROWS, gc = MIN_COLS + 1, gr = MIN_ROWS + 1, cells = [], tiles = [],
     cur = {c: 0, r: 0}, moving = null, locked = false, loginActive = false;   // moving: {i, from: {c, r}, touch} while an app is carried
 const appAt = (c, r) => at[c + ',' + r] ?? -1;
+
+// Folders: an app whose manifest says tile.folder is not on the home grid, its folder is. A folder is a tile (the pictures of its first apps); A opens it
+// and the grid shows its apps, the first cell is a way back (B does the same). `all` is every app the shell lists, `apps` what the grid shows now.
+const FOLDER_NAMES = {'system-utilities': 'System Utilities'};
+const folderName = id => I18N.t(FOLDER_NAMES[id] || id.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '));
+function viewList() {
+  if (folder) return [{id: 'back:' + folder, name: folderName(folder), back: true}].concat(all.filter(a => a.folder === folder));
+  const out = [], seen = new Set();
+  for (const a of all) {
+    if (!a.folder) { out.push(a); continue; }
+    if (seen.has(a.folder)) continue;
+    seen.add(a.folder);
+    const members = all.filter(x => x.folder === a.folder);
+    out.push({id: 'folder:' + a.folder, name: folderName(a.folder), inside: a.folder, members, badge: members.reduce((n, m) => n + (m.badge || 0), 0)});
+  }
+  return out;
+}
+function setView() { apps = viewList(); }
+function openFolder(id) {
+  if (moving) return;
+  topAt = {c: cur.c, r: cur.r}; folder = id; setView();
+  cur = {c: 1, r: 0};   // on the first app, not on the way back
+  render(); select(cur.c, cur.r);
+}
+function closeFolder() {
+  if (!folder || moving) return;
+  const id = folder; folder = null; setView();
+  const pos = render(), k = apps.findIndex(a => a.inside === id);
+  const p = k >= 0 ? pos[k] : topAt || {c: 0, r: 0};
+  select(p.c, p.r);
+}
+// the picture of a tile: the app's icon or its first letter; a folder shows up to four of its apps; the way back is an arrow
+function fillTile(t, a) {
+  if (a.back) { const g = document.createElement('span'); g.className = 'glyph'; g.textContent = '\u25C2'; t.appendChild(g); }
+  else if (a.members) {
+    const m = document.createElement('span'); m.className = 'mini' + (a.members.length === 1 ? ' one' : '');
+    a.members.slice(0, 4).forEach(x => {
+      const e = x.icon ? document.createElement('img') : document.createElement('span');
+      if (x.icon) e.src = x.icon; else e.textContent = x.name.trim().charAt(0).toUpperCase();
+      m.appendChild(e);
+    });
+    t.appendChild(m);
+  }
+  else if (a.icon) { const im = document.createElement('img'); im.src = a.icon; t.appendChild(im); }
+  else { const g = document.createElement('span'); g.className = 'glyph'; g.textContent = a.name.trim().charAt(0).toUpperCase(); t.appendChild(g); }
+  const l = document.createElement('span'); l.className = 'label'; l.textContent = a.name; t.appendChild(l);
+  if (a.badge) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = a.badge > 99 ? '99+' : a.badge; t.appendChild(b); }
+}
 
 // cols x rows is the apps' area: up to the rightmost and the lowest app, at least the screen. The grid adds one free column on the right
 // and one free row at the bottom (room to move an app to), so it is never smaller than 5 x 4
@@ -193,7 +245,7 @@ function layout() {
   const n = apps.length, wide = Math.max(MIN_COLS, Math.ceil(Math.sqrt(n * 1.3))), pos = [];
   at = {};
   apps.forEach((a, i) => {
-    const p = places[a.id];
+    const p = folder ? null : places[a.id];
     if (Array.isArray(p) && p.length === 2 && p.every(v => Number.isInteger(v) && v >= 0 && v < 100) && !((p[0] + ',' + p[1]) in at)) {
       pos[i] = {c: p[0], r: p[1]}; at[p[0] + ',' + p[1]] = i;
     }
@@ -239,10 +291,7 @@ function render() {
       const t = document.createElement('button');
       t.className = 'tile' + on;
       t.style.cssText = `left:${left};top:${top};background:${color};color:${textColor(color)}`;
-      if (a.icon) { const im = document.createElement('img'); im.src = a.icon; t.appendChild(im); }
-      else { const g = document.createElement('span'); g.className = 'glyph'; g.textContent = a.name.trim().charAt(0).toUpperCase(); t.appendChild(g); }
-      const l = document.createElement('span'); l.className = 'label'; l.textContent = a.name; t.appendChild(l);
-      if (a.badge) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = a.badge > 99 ? '99+' : a.badge; t.appendChild(b); }
+      fillTile(t, a);
       t.onclick = () => { if (moving) return; select(c, r); launch(i); };
       content.appendChild(t); cells.push(t); tiles[i] = t;
     } else {
@@ -256,9 +305,7 @@ function render() {
     const a = apps[moving.i], color = PALETTE[hash(a.id) % PALETTE.length], t = document.createElement('div');
     t.className = 'tile lift';
     t.style.cssText = `left:${cur.c * CW}px;top:${cur.r * CH}px;background:${color};color:${textColor(color)}`;
-    if (a.icon) { const im = document.createElement('img'); im.src = a.icon; t.appendChild(im); }
-    else { const g = document.createElement('span'); g.className = 'glyph'; g.textContent = a.name.trim().charAt(0).toUpperCase(); t.appendChild(g); }
-    const l = document.createElement('span'); l.className = 'label'; l.textContent = a.name; t.appendChild(l);
+    fillTile(t, a);
     content.appendChild(t); tiles[moving.i] = t;
   }
   more();
@@ -301,7 +348,7 @@ function reveal() {
 // ---- moving an app: pick it up, put it down on a cell (an app that stands there takes the carried app's old place), or take it back --------
 function pick(c, r, touch) {
   const i = appAt(c, r);
-  if (i < 0 || moving) return false;
+  if (i < 0 || moving || folder) return false;   // the apps of a folder keep the manifest's order
   moving = {i, from: {c, r}, touch};
   render(); select(c, r);
   return true;
@@ -325,6 +372,8 @@ function cancelMove() {
 
 async function launch(i) {
   if (locked || !apps[i]) return;
+  if (apps[i].inside) return openFolder(apps[i].inside);
+  if (apps[i].back) return closeFolder();
   locked = true;
   const t = tiles[i];
   if (t) t.classList.add('busy');
@@ -394,6 +443,7 @@ addEventListener('keydown', e => {
   else if (e.key === 'ArrowDown') r++;
   else if (e.key === 'F2') { e.preventDefault(); moving ? drop(c, r) : pick(c, r, false); return; }
   else if (e.key === 'F3') { if (moving) { e.preventDefault(); cancelMove(); } return; }
+  else if (e.key === 'Escape') { if (folder && !moving && !panelOpen) { e.preventDefault(); closeFolder(); } return; }   // B
   else if (e.key === 'Enter') { e.preventDefault(); const i = appAt(c, r); if (i >= 0 && !moving) launch(i); return; }   // an empty cell: nothing
   else handled = false;
   if (!handled) return;
@@ -474,8 +524,8 @@ async function panelAct() {
   else if (r.k === 'clear') { await api('/notifications/clear', {}); psel = 0; }
   else {  // opens the app the notification came from (when it is on the launcher) and takes the notification away
     await api('/notifications/dismiss', {id: r.n.id});
-    const who = (r.n.app || '').toLowerCase(), i = apps.findIndex(a => a.id === who || a.name.toLowerCase() === who);   // (Clock and Calendar name themselves with a capital)
-    if (i >= 0) { panelShow(false); launch(i); return; }
+    const who = (r.n.app || '').toLowerCase(), a = all.find(a => a.id === who || a.name.toLowerCase() === who);   // (Clock and Calendar name themselves with a capital)
+    if (a) { panelShow(false); api('/launch', {id: a.id}).catch(() => {}); return; }
   }
   await panelLoad();
 }
@@ -602,7 +652,7 @@ async function carolineWait() {
 }
 
 async function startLauncher() {
-  apps = await api('/apps');
+  all = await api('/apps'); setView();
   try { places = JSON.parse((await api('/db/get?key=places')).value || '{}') || {}; } catch (e) {}   // where the user has put the apps
   // the launcher is a page of the shared window: it comes back with the cell that was selected
   let s0 = null; try { s0 = (sessionStorage.getItem('cell') || '').split(',').map(Number); } catch (e) {}
@@ -613,12 +663,16 @@ async function startLauncher() {
     try {
       const now = await api('/apps');
       if (moving) return;   // nothing changes under an app that is being moved
-      if (now.length !== apps.length || now.some((a, i) => a.id !== apps[i].id)) { apps = now; render(); return; }
-      now.forEach((a, i) => {
-        if ((a.badge || 0) === (apps[i].badge || 0)) return;
-        apps[i].badge = a.badge;
-        const old = tiles[i] && tiles[i].querySelector('.badge'); if (old) old.remove();
-        if (a.badge && tiles[i]) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = a.badge > 99 ? '99+' : a.badge; tiles[i].appendChild(b); }
+      if (now.length !== all.length || now.some((a, i) => a.id !== all[i].id || a.folder !== all[i].folder)) {
+        all = now; if (folder && !all.some(a => a.folder === folder)) folder = null;
+        setView(); render(); return;
+      }
+      now.forEach((a, i) => { all[i].badge = a.badge; });
+      viewList().forEach((v, k) => {
+        if ((v.badge || 0) === (apps[k].badge || 0)) return;
+        apps[k].badge = v.badge;
+        const old = tiles[k] && tiles[k].querySelector('.badge'); if (old) old.remove();
+        if (v.badge && tiles[k]) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = v.badge > 99 ? '99+' : v.badge; tiles[k].appendChild(b); }
       });
     } catch (e) {}
   }, 3000);

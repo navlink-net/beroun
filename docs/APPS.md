@@ -27,6 +27,7 @@ Any app may also declare services, endpoints, a big page for the external displa
 | Ratatosk (system) | Messenger with end-to-end encryption, groups, attachments, LiveKit audio/video calls; a module service inside `shelld` |
 | Store (system) | Install/update/remove apps; permission `apps.manage` |
 | Communicator | Mail, WhatsApp, Telegram, Signal, Slack in one style; backend is Caroline's message store (`ic_messaging`) |
+| Notes | The owner's SquirrelWisdom notes (the same as on the website), kept on the device and synced by `notesd` (permission `account.session`; key `notes_key` in `keys.json`); Caroline's own `Caroline:*` folders are hidden |
 | Files, Notepad, Calculator | File manager (`opens` maps file types to apps), plain-text notes, calculator |
 | Music, Video | Players with a remembered place; WPE needs a user gesture before sound |
 | Calendar (`calendard`), Clock (`alarmd`) | Services that ring in sleep |

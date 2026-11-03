@@ -7,6 +7,8 @@
 The notes are kept on the device (INTELLICAT_DATA/notes.json) and synchronised with the account's Notes plugin in the background: the app works without
 a network, a note written offline goes up when the network is back. The protocol is portal/NOTES_API.md of the squirrel_wisdom repository (`plugin:call`,
 plugin `Notes`: readIndex, writeNoteFile, patchIndex); the session is the device's own (the shell gives it to this service only: permission account.session).
+Folders whose name starts with "Caroline:" are Caroline's own storage in the same account (her memory, profile, settings, vault): they are synchronised
+like any note (so that nothing is lost) but never shown, found, read, changed or counted here, for the owner or for her tools.
 Conflicts are decided as the web client does (mergeNotes): the note with the newer `updatedAt` wins, per note. Deleting is soft (`deleted: true`).
 
 The page and Caroline's MCP server reach it through the shell (/api/app/notes/<path>):
@@ -46,6 +48,7 @@ FILE = os.path.join(DATA, "notes.json")
 SYNC_EVERY_S = float(os.environ.get("NOTES_SYNC_S") or 60)
 PUSH_DELAY_S = float(os.environ.get("NOTES_PUSH_DELAY_S") or 1)     # a burst of edits goes up as one
 ID_CHARS = string.ascii_letters + string.digits
+HIDDEN_PREFIX = "Caroline:"
 MAX_TEXT = 1_000_000
 
 lock = threading.RLock()
@@ -211,8 +214,17 @@ def norm_folder(raw):
     return "/".join(s.strip() for s in str(raw or "").replace("\\", "/").split("/") if s.strip())
 
 
+def hidden(n):
+    return norm_folder(n.get("folder")).startswith(HIDDEN_PREFIX)
+
+
+def visible(n):
+    """A note this app shows: not deleted, not Caroline's."""
+    return bool(n) and not n.get("deleted") and not hidden(n)
+
+
 def active():
-    return {i: n for i, n in cache["notes"].items() if not n.get("deleted")}
+    return {i: n for i, n in cache["notes"].items() if visible(n)}
 
 
 def title_of(text):
@@ -281,7 +293,7 @@ def op_note(q):
     nid = q.get("id", [""])[0]
     with lock:
         n = cache["notes"].get(nid)
-        if not n or n.get("deleted") or n.get("isFolderMarker"):
+        if not visible(n) or n.get("isFolderMarker"):
             return {"error": "no such note"}, 404
         return {"id": nid, "text": n.get("text") or "", "folder": norm_folder(n.get("folder")), "updatedAt": n.get("updatedAt") or 0,
                 "deadline": n.get("deadline"), "reminderLead": n.get("reminderLead")}
@@ -302,7 +314,7 @@ def op_save(b):
         nid = str(b.get("id") or "")
         if nid:
             old = cache["notes"].get(nid)
-            if not old or old.get("deleted"):
+            if not visible(old):
                 return {"error": "no such note"}, 404
             note = dict(old)               # fields this service does not know stay as they are
         else:
@@ -310,6 +322,8 @@ def op_save(b):
         note["text"] = text
         if "folder" in b:
             note["folder"] = norm_folder(b["folder"])
+            if hidden(note):
+                return {"error": "this folder is not available"}, 400
         note.setdefault("folder", "")
         for k in ("deadline", "reminderLead"):
             if k in b:
@@ -324,7 +338,7 @@ def op_save(b):
 def op_delete(b):
     with lock:
         n = cache["notes"].get(str(b.get("id")))
-        if not n or n.get("deleted"):
+        if not visible(n):
             return {"error": "no such note"}, 404
         touch(str(b["id"]), dict(n, deleted=True))
     return {"ok": True}
@@ -333,8 +347,10 @@ def op_delete(b):
 def op_move(b):
     with lock:
         n = cache["notes"].get(str(b.get("id")))
-        if not n or n.get("deleted"):
+        if not visible(n):
             return {"error": "no such note"}, 404
+        if hidden({"folder": b.get("folder")}):
+            return {"error": "this folder is not available"}, 400
         touch(str(b["id"]), dict(n, folder=norm_folder(b.get("folder"))))
     return {"ok": True}
 
@@ -343,6 +359,8 @@ def op_folder(b):
     op, path, to = b.get("op"), norm_folder(b.get("path")), norm_folder(b.get("to"))
     if not path or op not in ("create", "rename", "delete"):
         return {"error": "op is create, rename or delete and path is a folder"}, 400
+    if hidden({"folder": path}) or hidden({"folder": to}):
+        return {"error": "this folder is not available"}, 400
     with lock:
         if op == "create":
             if any(norm_folder(n.get("folder")) == path for n in active().values()):

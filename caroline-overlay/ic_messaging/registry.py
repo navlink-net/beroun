@@ -359,7 +359,7 @@ class Registry:
         dest = os.path.join(cache_dir, f"{int(message_id)}-{int(index)}-{media.ensure_ext(att.get('name'), att.get('mime', ''), att.get('kind', 'file'))}")
         if os.path.isfile(dest) and os.path.getsize(dest) > 0:
             os.utime(dest, None)                          # used: it stays longer
-            return dest, att
+            return dest, self._learn_size(m, atts, int(index), dest)
         part = dest + ".part"
         try:
             got = await self.adapter(conv["account"]).download(att.get("ref") or "", part)
@@ -372,7 +372,15 @@ class Registry:
             if os.path.exists(part):
                 os.remove(part)
         media.trim(cache_dir, keep=dest)
-        return dest, att
+        return dest, self._learn_size(m, atts, int(index), dest)
+
+    def _learn_size(self, m, atts, index, path):
+        """A service that did not say how big an attachment is (mail) gets the real size once the file is in hand."""
+        att = atts[index]
+        if not att.get("size"):
+            atts[index] = att = {**att, "size": os.path.getsize(path)}
+            self.store.update_message(m["id"], attachments=atts)
+        return att
 
     def set_muted(self, conv_id, muted):
         if not self.store.set_muted(conv_id, muted):

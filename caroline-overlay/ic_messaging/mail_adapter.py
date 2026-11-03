@@ -78,6 +78,18 @@ def _ts(date, fallback):
         return fallback
 
 
+def _size(a):
+    """The size the mail server reports for a part, when it does (field names differ between servers); 0 = unknown until the file is fetched."""
+    for k in ("size", "sizeBytes", "contentLength", "length"):
+        try:
+            n = int(a.get(k) or 0)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            return n
+    return 0
+
+
 class MailAdapter(Adapter):
     service = "mail"
     label = "Mail"
@@ -241,7 +253,7 @@ class MailAdapter(Adapter):
         if prior and len(people) == 1 and not people[0][0] and prior["title"] != key:
             title = prior["title"]                          # a mail without a display name must not rename a dialogue that has one
         text = src.get("text") or _strip_html(src.get("html") or "")
-        atts = [{"kind": "file", "name": a.get("filename") or "attachment", "size": 0, "mime": a.get("contentType") or "",
+        atts = [{"kind": "file", "name": a.get("filename") or "attachment", "size": _size(a), "mime": a.get("contentType") or "",
                  "ref": f"{folder}:{uid}:{a.get('index', i)}"} for i, a in enumerate(src.get("attachments") or [])]
         flags = head.get("flags") or []
         now = time.time()
@@ -262,7 +274,7 @@ class MailAdapter(Adapter):
             except AdapterError:
                 continue
             text = (full.get("text") or _strip_html(full.get("html") or "")).strip()
-            atts = [{"kind": "file", "name": a.get("filename") or "attachment", "size": 0, "mime": a.get("contentType") or "",
+            atts = [{"kind": "file", "name": a.get("filename") or "attachment", "size": _size(a), "mime": a.get("contentType") or "",
                      "ref": f"{folder}:{uid}:{a.get('index', i)}"} for i, a in enumerate(full.get("attachments") or [])]
             self.ctx.store.update_message(r["id"], text=text or "(no text)", attachments=atts)
             changed = True

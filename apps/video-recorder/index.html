@@ -1,0 +1,112 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Video Recorder</title>
+<meta name="viewport" content="width=640,height=480">
+<!-- Records the console's screen: the work is done by the service screenrecd (screenrecd.py), which goes on with this app closed. Start leaves the app so that the screen
+     of another app is what is recorded; opening the app again shows the recording and Stop. Keys: the cursor, A (Enter) and B (Escape) only. -->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #top { flex: none; padding: 10px 18px; background: #000; font-size: 18px; color: #8a949e; }
+  #body { flex: 1; min-height: 0; padding: 12px 18px; position: relative; }
+  .big { font-size: 64px; font-weight: bold; text-align: center; margin-top: 18px; font-variant-numeric: tabular-nums; color: #f2a900; }
+  .big.rec { color: #e5484d; }
+  .sub { text-align: center; font-size: 20px; color: #8a949e; margin: 6px 0 14px; min-height: 26px; }
+  .row { display: flex; align-items: center; padding: 8px 14px; margin-bottom: 4px; border-radius: 6px; background: #1d242b; font-size: 24px; }
+  .row.sel { background: #f2a900; color: #000; }
+  .row .n { flex: 1; }
+  .row .v { font-size: 20px; opacity: .85; }
+  .row.dim { opacity: .45; }
+  .hint { position: absolute; left: 18px; right: 18px; bottom: 8px; font-size: 14px; color: #6c7780; text-align: center; }
+  .item .n { font-size: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #list { max-height: 360px; overflow: hidden; }
+</style>
+<script src="/platform.js"></script>
+<div id="top">Video Recorder</div>
+<div id="body"></div>
+<script>
+(() => {
+  const API = '/api/app/video-recorder/';
+  const get = p => fetch(API + p).then(r => r.json());
+  const post = (p, b) => fetch(API + p, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b || {})}).then(async r => { const j = await r.json().catch(() => ({})); if (!r.ok && !j.error) j.error = 'error ' + r.status; return j; });
+  const DELAYS = [0, 3, 5, 10];
+  let st = {state: 'idle', can_record: true, sound: false}, view = 'main', sel = 0, sound = true, delay = 3, msg = '', files = [], fsel = 0, leaving = false;
+  const esc = s => String(s).replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]));
+  const clock = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  const size = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+  const rows = () => {
+    const r = [{k: 'go', n: Platform.t(st.state === 'idle' ? 'Start recording' : 'Stop recording')}];
+    if (st.sound) r.push({k: 'sound', n: Platform.t('Sound'), v: Platform.t(sound ? 'On' : 'Off')});
+    r.push({k: 'delay', n: Platform.t('Delay'), v: delay ? delay + ' s' : Platform.t('None')});
+    r.push({k: 'list', n: Platform.t('Recordings'), v: files.length ? String(files.length) : ''});
+    return r;
+  };
+  function draw() {
+    const body = document.getElementById('body');
+    if (view === 'list') {
+      body.innerHTML = `<div id="list">${files.length ? files.map((f, i) => `<div class="row item${i === fsel ? ' sel' : ''}"><span class="n">${esc(f.name)}</span><span class="v">${size(f.bytes)}</span></div>`).join('')
+        : `<div class="sub">${Platform.t('No recordings yet')}</div>`}</div><div class="sub">${esc(msg)}</div><div class="hint">↑/↓ · A ${Platform.t('play')} · B ${Platform.t('back')}</div>`;
+      const s = body.querySelector('.sel'); if (s) s.scrollIntoView({block: 'nearest'});
+      return;
+    }
+    const rec = st.state === 'recording', wait = st.state === 'waiting';
+    const big = rec ? '● ' + clock(st.elapsed || 0) : wait ? Platform.t('Starting…') : st.can_record ? Platform.t('Ready') : Platform.t('Not here');
+    const sub = !st.can_record ? Platform.t('This screen cannot be recorded on this device') : msg || (rec ? Platform.t('The screen is recorded; stop it here') : st.error ? st.error : Platform.t('Start leaves the app and records the screen you go to'));
+    const r = rows();
+    sel = Math.min(sel, r.length - 1);
+    body.innerHTML = `<div class="big${rec ? ' rec' : ''}">${esc(big)}</div><div class="sub">${esc(sub)}</div>` +
+      r.map((x, i) => `<div class="row${i === sel ? ' sel' : ''}${x.k === 'go' && !st.can_record ? ' dim' : ''}"><span class="n">${esc(x.n)}</span><span class="v">${esc(x.v || '')}</span></div>`).join('') +
+      `<div class="hint">↑/↓ ${Platform.t('choose')} · ←/→ ${Platform.t('change')} · A · B ${Platform.t('exit')}</div>`;
+  }
+  async function refresh() {
+    try { st = await get('status'); } catch (e) { st = Object.assign(st, {can_record: false}); }
+    try { files = (await get('list')).items || []; } catch (e) {}
+    draw();
+  }
+  async function act(k) {
+    if (k === 'go') {
+      if (!st.can_record) return;
+      if (st.state === 'idle') {
+        msg = '';
+        const r = await post('start', {delay, audio: sound && st.sound});
+        if (r.error) { msg = r.error; return refresh(); }
+        leaving = true; msg = Platform.t('Recording starts in') + ' ' + delay + ' s'; draw();
+        setTimeout(() => Platform.exit(), 700);
+      } else {
+        const r = await post('stop');
+        msg = r.error ? r.error : Platform.t('Saved') + ': ' + r.file.replace(/^.*\//, '') + ' · ' + size(r.bytes || 0) + ' · ' + clock(r.seconds || 0);
+        await refresh();
+      }
+    } else if (k === 'sound') { sound = !sound; draw(); }
+    else if (k === 'delay') { delay = DELAYS[(DELAYS.indexOf(delay) + 1) % DELAYS.length]; draw(); }
+    else if (k === 'list') { view = 'list'; fsel = 0; msg = ''; await refresh(); }
+  }
+  addEventListener('keydown', async e => {
+    const k = e.key;
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape'].includes(k)) return;
+    e.preventDefault();
+    if (leaving) return;
+    if (view === 'list') {
+      if (k === 'Escape') { view = 'main'; msg = ''; draw(); }
+      else if (k === 'ArrowUp') { fsel = Math.max(0, fsel - 1); draw(); }
+      else if (k === 'ArrowDown') { fsel = Math.min(files.length - 1, fsel + 1); draw(); }
+      else if (k === 'Enter' && files[fsel]) { try { await Platform.files.open(files[fsel].path); } catch (err) { msg = String(err && err.message || err); draw(); } }
+      return;
+    }
+    const r = rows();
+    if (k === 'Escape') return Platform.exit();
+    if (k === 'ArrowUp') { sel = Math.max(0, sel - 1); draw(); }
+    else if (k === 'ArrowDown') { sel = Math.min(r.length - 1, sel + 1); draw(); }
+    else if (k === 'Enter') await act(r[sel].k);
+    else if ((k === 'ArrowLeft' || k === 'ArrowRight') && r[sel].k === 'delay') {
+      delay = DELAYS[(DELAYS.indexOf(delay) + (k === 'ArrowRight' ? 1 : DELAYS.length - 1)) % DELAYS.length]; draw();
+    } else if ((k === 'ArrowLeft' || k === 'ArrowRight') && r[sel].k === 'sound') { sound = !sound; draw(); }
+  });
+  Platform.onClose(() => Platform.state.set({sound, delay}));
+  Platform.state.get().then(s => { if (s) { if (typeof s.sound === 'boolean') sound = s.sound; if (DELAYS.includes(s.delay)) delay = s.delay; } draw(); });
+  setInterval(() => { if (!leaving && view === 'main') refresh(); }, 1000);
+  refresh();
+})();
+</script>

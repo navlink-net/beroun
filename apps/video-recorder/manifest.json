@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "id": "video-recorder",
+  "name": "Video Recorder",
+  "version": "1.0.0",
+  "icon": "icon.png",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "tile": {"folder": "system-utilities"},
+  "services": [
+    {"id": "screenrecd", "name": "Screen recorder", "host": "process", "cmd": ["python3", "{app}/screenrecd.py", "{port}"], "port": 48806,
+     "start": "open", "required_by": ["video-recorder"], "priority": 70, "memory_mb": 150, "sleep": false}
+  ],
+  "endpoints": [
+    {"path": "status", "methods": ["GET"], "service": "screenrecd"},
+    {"path": "list", "methods": ["GET"], "service": "screenrecd"},
+    {"path": "start", "methods": ["POST"], "service": "screenrecd"},
+    {"path": "stop", "methods": ["POST"], "service": "screenrecd"}
+  ],
+  "caroline": {
+    "description": "Video Recorder: records the console's screen (and the sound it plays) into an MP4 on the SD card, with the app closed; start, stop, list the recordings",
+    "skills": ["skills"],
+    "mcp": [
+      {"id": "recorder", "transport": "stdio", "cmd": ["python3", "{app}/recorder_mcp.py", "{port}"], "service": "screenrecd"}
+    ]
+  }
+}

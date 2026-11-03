@@ -31,6 +31,7 @@ Any app may also declare services, endpoints, a big page for the external displa
 | Books | FB2 reader for the SquirrelWisdom library (public and own books), parsed and kept on the device by `booksd` (permission `account.session`; key `books_key` in `keys.json`, only to learn the account folder); the place of reading is kept per book; local `.fb2` files from Files come later |
 | Files, Notepad, Calculator | File manager (`opens` maps file types to apps), plain-text notes, calculator |
 | Music, Video | Players with a remembered place; WPE needs a user gesture before sound |
+| Video Recorder (folder System Utilities) | Records the console's screen and the sound it plays into `Videos/Screen-<date>.mp4` on the SD card; the service `screenrecd` keeps recording with the app closed (Start leaves the app, a delay of 0 to 10 s, stop by opening the app again, an end by itself after 30 minutes); H.264 and AAC in fragmented MP4, so a file survives a crash. It grabs the display of the console window (`console_display`: the simulators); a device with no such source says `can_record` false. Caroline has `start_recording`, `stop_recording`, `recording_status`, `list_recordings` (MCP `recorder`) |
 | Calendar (`calendard`), Clock (`alarmd`) | Services that ring in sleep |
 | Knights & Ladies, Pirates, Quidditch | Games |
 | Minecraft (`minecraftd`) | Client of the cloud Minecraft of SquirrelWisdom; big page is a native player (`minecraft-player`) |

@@ -314,19 +314,20 @@
   function showBox(m, ws) {
     if (box && box.id === m.id) { box.ws = ws; return; }   // asked again: a page that has just connected, the next of the queue
     hideBox();
+    if (!document.getElementById('bbox-style')) { const st = document.createElement('style'); st.id = 'bbox-style'; st.textContent = '@keyframes bbox-in{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}'; document.head.appendChild(st); }
     const mk = (tag, css, text) => { const e = document.createElement(tag); e.style.cssText = css; if (text !== undefined) e.textContent = text; return e; };
-    const el = mk('div', 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;font:20px "DejaVu Sans",sans-serif;color:#fff;-webkit-user-select:none;user-select:none');
-    const card = mk('div', 'width:520px;max-width:92%;background:#1d242b;border:2px solid #f2a900;border-radius:10px;padding:18px 22px;text-align:center');
+    const el = mk('div', 'position:fixed;inset:0;z-index:2147483647;background:rgba(6,9,12,.74);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;font:20px "DejaVu Sans",sans-serif;color:#fff;-webkit-user-select:none;user-select:none');
+    const card = mk('div', 'width:520px;max-width:92%;background:linear-gradient(180deg,#26303a,#1a2027);border:1px solid rgba(242,169,0,.55);border-radius:18px;padding:24px 26px 22px;text-align:center;box-shadow:0 18px 60px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.04) inset;animation:bbox-in .16s ease-out');
     const icons = {info: ['i', '#3b82f6'], question: ['?', '#f2a900'], warning: ['!', '#f2a900'], error: ['×', '#e5484d']};
-    if (icons[m.icon]) card.appendChild(mk('div', 'width:46px;height:46px;line-height:46px;margin:0 auto 8px;border-radius:50%;font-size:30px;font-weight:bold;color:#000;background:' + icons[m.icon][1], icons[m.icon][0]));
-    if (m.title) card.appendChild(mk('div', 'font-size:24px;font-weight:bold;color:#f2a900;margin-bottom:8px', t(m.title)));
-    if (m.text) card.appendChild(mk('div', 'font-size:20px;line-height:1.35;margin-bottom:16px;white-space:pre-wrap;max-height:200px;overflow:hidden', m.text));
+    if (icons[m.icon]) card.appendChild(mk('div', 'width:52px;height:52px;line-height:52px;margin:0 auto 12px;border-radius:50%;font-size:32px;font-weight:bold;color:#10151a;box-shadow:0 0 0 6px rgba(255,255,255,.07);background:' + icons[m.icon][1], icons[m.icon][0]));
+    if (m.title) card.appendChild(mk('div', 'font-size:24px;font-weight:bold;color:#fff;letter-spacing:.2px;margin-bottom:10px', t(m.title)));
+    if (m.text) card.appendChild(mk('div', 'font-size:19px;line-height:1.4;color:#c9d2da;margin-bottom:20px;white-space:pre-wrap;max-height:200px;overflow:hidden', m.text));
     const row = mk('div', 'display:flex;gap:12px;justify-content:center');
-    box = {id: m.id, el, i: m.default || 0, n: m.buttons.length, ws, btns: m.buttons.map(b => row.appendChild(mk('div', 'min-width:96px;padding:10px 18px;border-radius:6px', t(b))))};
+    box = {id: m.id, el, i: m.default || 0, n: m.buttons.length, ws, btns: m.buttons.map(b => row.appendChild(mk('div', 'min-width:104px;padding:11px 22px;border-radius:999px;font-weight:bold;border:1px solid rgba(255,255,255,.12);transition:background .1s', t(b))))};
     card.appendChild(row); el.appendChild(card); document.body.appendChild(el);
     paintBox();
   }
-  function paintBox() { box.btns.forEach((b, k) => { b.style.background = k === box.i ? '#f2a900' : '#2b343c'; b.style.color = k === box.i ? '#000' : '#fff'; }); }
+  function paintBox() { box.btns.forEach((b, k) => { b.style.background = k === box.i ? '#f2a900' : '#2b343c'; b.style.color = k === box.i ? '#10151a' : '#e6ebf0'; b.style.boxShadow = k === box.i ? '0 0 0 3px rgba(242,169,0,.35)' : 'none'; }); }
   function answerBox(index) { const b = box; hideBox(); try { b.ws.send(JSON.stringify({t: 'msgbox_result', id: b.id, index})); } catch (err) {} }
   addEventListener('keydown', e => {   // while a box is up the page hears nothing: the cursor chooses, A confirms, B cancels
     if (!box) return;

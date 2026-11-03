@@ -88,6 +88,15 @@
       : e.kind === 'config' ? T('Books are not set up') : (e.message || T('Something went wrong'));
   }
 
+  // A failure is told in the system MessageBox; on a poor link it offers another try (booksd has already tried a few times by itself). true: the owner wants to retry.
+  async function report(e, title) {
+    say('');
+    const net = e.kind === 'network';
+    const r = await Platform.messageBox(Object.assign({title: T(net ? 'No connection' : title), text: failText(e), icon: net ? 'warning' : 'error', timeout: 0},
+      net ? {buttons: ['Try again', 'Close'], default: 0} : {kind: 'ok'})).catch(() => null);
+    return !!(net && r && r.index === 0);
+  }
+
   // ---- the library -------------------------------------------------------------------------------
   async function load() {
     say('');
@@ -101,7 +110,7 @@
         if (!r.signedIn) say(failText({kind: 'signin'}));
         else if (r.stale) say(T('Offline: the list is from the last time'));
       }
-    } catch (e) { books = []; say(failText(e)); }
+    } catch (e) { books = []; say(failText(e)); if (e.kind === 'network' && await report(e, 'The list did not load')) return load(); }
     rows = [];
     if (tab !== 'reading') {
       rows.push({kind: 'search'});
@@ -242,7 +251,7 @@
       draw();
       const r = b.read || {chapter: 0, block: 0};
       await showChapter(Math.min(r.chapter || 0, b.chapters.length - 1), r.block || 0);
-    } catch (e) { cur = null; mode = 'list'; say(failText(e)); draw(); }
+    } catch (e) { cur = null; mode = 'list'; draw(); if (await report(e, 'The book did not open')) return openBook(scope, id); }
   }
 
   async function closeBook() {
@@ -312,7 +321,7 @@
         } else if (e.key === 'Enter' && rows[sel]) await activate(rows[sel]);
         else if (e.key === 'Escape') { await Platform.state.set({}).catch(() => {}); return Platform.exit(); }
       }
-    } catch (err) { console.error(err); say(failText(err)); }
+    } catch (err) { console.error(err); report(err, 'Something went wrong'); }
     draw();
   });
 
@@ -320,7 +329,7 @@
     const el = e.target.closest('.row'); if (!el || picker || mode !== 'list') return;
     const i = [...$('list').querySelectorAll('.row')].indexOf(el);
     if (i < 0 || !rows[i]) return;
-    sel = i; draw(); await activate(rows[i]).catch(err => say(failText(err))); draw();
+    sel = i; draw(); await activate(rows[i]).catch(err => report(err, 'Something went wrong')); draw();
   });
 
   Platform.onClose(async () => {

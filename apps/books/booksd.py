@@ -78,19 +78,38 @@ def books_key():
     return k
 
 
+RETRIES = int(os.environ.get("BOOKS_RETRIES") or 3)               # tries of one request on a poor link
+RETRY_PAUSE_S = float(os.environ.get("BOOKS_RETRY_PAUSE_S") or 1.5)   # the pause before the second try; doubled for each next one
+
+
+def with_retries(fn, what):
+    """Runs fn(); a network failure (or a 5xx of the site) is tried again after a growing pause, any other error at once."""
+    for attempt in range(RETRIES):
+        try:
+            return fn()
+        except BooksError as e:
+            if e.kind != "network" or attempt == RETRIES - 1:
+                raise
+            pause = RETRY_PAUSE_S * 2 ** attempt
+            log(what, "failed:", e, f"- again in {pause:g} s ({attempt + 2}/{RETRIES})")
+            time.sleep(pause)
+
+
 def get_file(path, limit=MAX_BOOK_BYTES):
-    """A file of the site, by its path from the root (contents/Books/...)."""
-    req = urllib.request.Request(urllib.parse.urljoin(SW_URL, path), headers={"Cache-Control": "no-cache"})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = r.read(limit + 1)
-    except urllib.error.HTTPError as e:
-        raise BooksError("notfound" if e.code == 404 else "network" if e.code >= 500 else "service", f"HTTP {e.code} for {path}")
-    except (urllib.error.URLError, OSError) as e:
-        raise BooksError("network", str(getattr(e, "reason", e)))
-    if len(data) > limit:
-        raise BooksError("service", f"{path} is too big")
-    return data
+    """A file of the site, by its path from the root (contents/Books/...); a poor link is tried again."""
+    def once():
+        req = urllib.request.Request(urllib.parse.urljoin(SW_URL, path), headers={"Cache-Control": "no-cache"})
+        try:
+            with urllib.request.urlopen(req, timeout=40) as r:
+                data = r.read(limit + 1)
+        except urllib.error.HTTPError as e:
+            raise BooksError("notfound" if e.code == 404 else "network" if e.code >= 500 else "service", f"HTTP {e.code} for {path}")
+        except (urllib.error.URLError, OSError) as e:      # includes a timeout and a connection cut in the middle of the file
+            raise BooksError("network", str(getattr(e, "reason", e)))
+        if len(data) > limit:
+            raise BooksError("service", f"{path} is too big")
+        return data
+    return with_retries(once, path)
 
 
 def session(fresh=False):
@@ -123,13 +142,16 @@ def user_hash():
     for attempt in (0, 1):
         body = {"command": "user:getSessionUser", "session": session(fresh=bool(attempt)), ".msgid": int(time.time() * 1000), "key": key}
         req = urllib.request.Request(SW_URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=40) as r:
-                out = json.loads(r.read())
-        except (urllib.error.URLError, OSError) as e:
-            raise BooksError("network", str(getattr(e, "reason", e)))
-        except ValueError:
-            raise BooksError("service", "The site answered with something else than JSON")
+
+        def ask():
+            try:
+                with urllib.request.urlopen(req, timeout=40) as r:
+                    return json.loads(r.read())
+            except (urllib.error.URLError, OSError) as e:
+                raise BooksError("network", str(getattr(e, "reason", e)))
+            except ValueError:
+                raise BooksError("service", "The site answered with something else than JSON")
+        out = with_retries(ask, "user:getSessionUser")
         if out.get(".status") == "ok" and out.get("user"):
             h = hashlib.sha256(str(out["user"]).encode()).hexdigest()[:16]
             save_json("account.json", {"hash": h})

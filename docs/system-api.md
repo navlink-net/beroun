@@ -128,6 +128,13 @@ Errors carry `code`: `offline` 502, `not-found` / `not-installed` 404, `system` 
 `no-key` 503 (the device has no store key yet: nothing can be installed). Installed apps live in `~/.intellicat/apps/<id>/` (`INTELLICAT_APPS`); their services get `INTELLICAT_DATA` and
 `INTELLICAT_APP_DATA` pointing at the app's own folder, and use the ports 49000-49999.
 
+## Ferret (`/lib/ferret/`)
+
+The system also serves one pinned copy of the Ferret game engine's release (`FERRET_VERSION` in `config/versions.env`, files in `web-shell/lib/ferret/` with `SHA256SUMS`): the WASM files a Ferret game loads at run time
+(`recast/recast-navigation.wasm.wasm` for navigation, `havok/HavokPhysics.wasm` for rigid bodies), `hls/hls.min.js` and `ferret.js` (the engine as one script for an app that does not bundle it). A Ferret game
+packed for OS Beroun (`dist/beroun` of its build: Babylon.js external at `/lib/babylon/`, the engine bundled) asks for these files at these addresses and does not carry them. To change the version: build Ferret
+(`pnpm build`), copy `dist/lib/ferret/` here without the `.map`, drop its line from `SHA256SUMS`, set `FERRET_VERSION`.
+
 ## 3D (Babylon.js)
 
 The system serves one pinned Babylon.js (`BABYLON_VERSION` in `config/versions.env`) at `/lib/babylon/`: `babylon.js` (core), `babylonjs.loaders.min.js` (glTF/GLB, OBJ, STL), `babylonjs.materials.min.js`

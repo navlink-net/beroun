@@ -2515,8 +2515,8 @@ class H(BaseHTTPRequestHandler):
         # a charset belongs to text only: "application/wasm; charset=..." is not a type WebAssembly.instantiateStreaming accepts everywhere
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith("text/") or ctype == "application/json" else ""))
         self.send_header("Content-Length", str(size))
-        # the shell's own pages are small and local: always revalidate; Babylon.js (/lib/babylon/, megabytes) changes only with the OS, so it is cached
-        self.send_header("Cache-Control", "public, max-age=86400" if rel.startswith("lib/babylon/") and base.endswith("web-shell") else "no-cache")
+        # the shell's own pages are small and local: always revalidate; Babylon.js and Ferret (/lib/babylon/, /lib/ferret/, megabytes) change only with the OS, so they are cached
+        self.send_header("Cache-Control", "public, max-age=86400" if rel.startswith(("lib/babylon/", "lib/ferret/")) and base.endswith("web-shell") else "no-cache")
         self.end_headers()
         try:
             with open(full, "rb") as f:   # in blocks: the libraries and models are megabytes

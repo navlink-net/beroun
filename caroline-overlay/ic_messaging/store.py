@@ -7,6 +7,8 @@ pending message instead of being added twice. Times are seconds since the epoch 
 """
 import json, sqlite3, threading, time
 
+from . import media
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY, account TEXT NOT NULL, service TEXT NOT NULL, role TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'dm',
@@ -155,7 +157,7 @@ class Store:
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (m["conv"], m["account"], None if ext is None else str(ext), m.get("client_ref"), m.get("sender", ""), m.get("sender_name", ""),
                  float(m["ts"]), m.get("text", ""), m.get("subject", ""), int(bool(m.get("outgoing"))), m.get("state", "sent"),
-                 m.get("reply_to"), m.get("actor", ""), json.dumps(m.get("attachments") or []), read))
+                 m.get("reply_to"), m.get("actor", ""), json.dumps(media.normalize(m.get("attachments"))), read))
             mid = cur.lastrowid
             line = (m.get("text") or "").strip().replace("\n", " ")
             if not line and m.get("attachments"):
@@ -293,7 +295,7 @@ class Store:
             if subject is not None:
                 self.db.execute("UPDATE messages SET subject=? WHERE id=?", (subject, mid))
             if attachments is not None:
-                self.db.execute("UPDATE messages SET attachments=? WHERE id=?", (json.dumps(attachments), mid))
+                self.db.execute("UPDATE messages SET attachments=? WHERE id=?", (json.dumps(media.normalize(attachments)), mid))
             m = self.get_message(mid)
             if m and text:
                 last = self._one("SELECT id FROM messages WHERE conv=? ORDER BY ts DESC, id DESC LIMIT 1", (m["conv"],))

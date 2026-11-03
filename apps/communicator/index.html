@@ -89,6 +89,23 @@
   .att .ai { flex:none; width:22px; height:22px; border-radius:4px; background:var(--c); color:#fff; font-size:12px; font-weight:bold; line-height:22px; text-align:center; }
   .att .an { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .att .as { flex:none; font-size:12px; opacity:.7; }
+  .att .ai { min-width:22px; width:auto; padding:0 4px; }
+  .att.playing .ai { background:var(--accent); color:#000; }
+  .pic { position:relative; width:220px; max-width:100%; height:150px; margin:3px 0; border-radius:8px; background:#0003; overflow:hidden; cursor:pointer; display:flex; align-items:center; justify-content:center; text-align:center; font-size:13px; padding:6px; }
+  .pic img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:none; }
+  .pic.ready img { display:block; }
+  .pic.ready .pl { display:none; }
+  .pic .pl { opacity:.8; overflow:hidden; text-overflow:ellipsis; }
+  .pic.sticker { background:transparent; }
+  .pic.sticker img { object-fit:contain; }
+  /* the viewer: one picture or clip over the whole window */
+  #viewer { position:fixed; inset:0; background:#000; display:none; flex-direction:column; z-index:20; }
+  #viewer.on { display:flex; }
+  #vstage { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:16px; }
+  #vstage img, #vstage video { max-width:100%; max-height:100%; object-fit:contain; }
+  #vcap { flex:none; min-height:22px; max-height:64px; overflow:hidden; padding:3px 12px; font-size:14px; color:#ddd; text-align:center; }
+  #vbar { flex:none; display:flex; align-items:center; gap:8px; padding:6px 8px; background:var(--panel); }
+  #vbar #vcount { flex:1; text-align:center; font-size:14px; color:var(--dim); }
   #attach { flex:none; height:40px; line-height:40px; padding:0 12px; border-radius:8px; background:#2d3640; color:#fff; font-size:15px; cursor:pointer; }
   #attach.off { display:none; }
   #attchip { flex:none; max-width:130px; height:36px; line-height:36px; padding:0 10px; border-radius:6px; background:var(--accent); color:#000; font-size:13px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:none; }
@@ -142,6 +159,12 @@
   <div id="dp"></div>
   <div id="df"></div>
   <div id="dbtn"><span class="btn" role="button" id="dcancel">Cancel</span><span class="btn on" id="dok">OK</span></div>
+</div>
+
+<div id="viewer">
+  <div id="vstage"></div>
+  <div id="vcap"></div>
+  <div id="vbar"><span class="btn" role="button" id="vprev">&larr;</span><span id="vcount"></span><span class="btn" role="button" id="vnext">&rarr;</span><span class="btn" role="button" id="vsave">Save</span><span class="btn on" role="button" id="vclose">Close</span></div>
 </div>
 
 <script src="/platform.js"></script>
@@ -288,6 +311,135 @@ async function openAttachment(m, index) {
   } catch (e) { $('#note').style.color = 'var(--err)'; $('#note').textContent = e.message; }
 }
 
+// ---- attachments shown in the dialogue ---------------------------------------------------------------
+// A picture is a thumbnail, a clip opens in the viewer, a voice message or a song plays on its plate, any other file is a plate that saves
+// and opens it. What is shown is fetched into the cache of the device (/attachment, once); Downloads gets a copy only on Save or on a file's tap.
+const AUTO_MAX = 25 * 1048576;                       // a bigger file is not fetched until it is tapped
+const VIEWABLE = ['photo', 'sticker', 'video'];
+S.media = {}; S.mediaDone = {}; S.audio = null; S.viewer = null;
+function fetchMedia(m, i) {
+  const k = m.id + ':' + i;
+  if (!S.media[k]) S.media[k] = post('attachment', {conv: S.chat.id, id: m.id, index: i}).then(r => (S.mediaDone[k] = r)).catch(e => { delete S.media[k]; throw e; });
+  return S.media[k];
+}
+function say(text, bad) { $('#note').style.color = bad ? 'var(--err)' : 'var(--dim)'; $('#note').textContent = text; }
+// the cache may have dropped the file since it was fetched (trimmed, or the card changed): ask again, once
+async function refetch(m, i) { const k = m.id + ':' + i; delete S.media[k]; delete S.mediaDone[k]; return fetchMedia(m, i); }
+let thumbQ = Promise.resolve();                      // thumbnails are fetched one at a time, after the text is drawn
+function loadThumb(box, img, m, i) {
+  const k = m.id + ':' + i, done = r => {
+    img.onload = () => box.classList.add('ready');
+    img.onerror = async () => { img.onerror = null; try { done(await refetch(m, i)); img.onerror = null; } catch (e) { box.title = e.message; } };
+    img.src = Platform.files.imageUrl(r.path);
+  };
+  if (S.mediaDone[k]) return done(S.mediaDone[k]);
+  thumbQ = thumbQ.then(async () => { if (box.isConnected) try { done(await fetchMedia(m, i)); } catch (e) { box.title = e.message; } });
+}
+// a picture the shell can stream to an <img>: a photo or sticker of a supported type (a service that gives no type is tried: the cache names it by kind)
+function showable(a) { return (a.kind === 'photo' || a.kind === 'sticker') && (!a.mime || /^image\/(jpeg|png|gif|webp|bmp)$/.test(a.mime)); }
+function typeWord(a) {
+  const ext = ((a.name || '').match(/\.([A-Za-z0-9]{1,4})$/) || [])[1];
+  return ext ? ext.toUpperCase() : 'F';
+}
+function fmtDur(s) { s = Math.max(0, Math.round(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function attNode(m, a, ai) {
+  const kind = a.kind || 'file', label = a.name || kind;
+  if (showable(a)) {
+    const box = document.createElement('div'); box.className = 'pic' + (kind === 'sticker' ? ' sticker' : ''); box.setAttribute('role', 'button');
+    box.innerHTML = '<span class="pl"></span><img alt="">';
+    box.querySelector('.pl').textContent = label + (a.size ? '  ' + fmtSize(a.size) : '');
+    box.onclick = () => openViewer(m, ai);
+    if (!a.size || a.size <= AUTO_MAX) loadThumb(box, box.querySelector('img'), m, ai);
+    return box;
+  }
+  const at = document.createElement('div'); at.className = 'att'; at.setAttribute('role', 'button');
+  const playable = kind === 'audio' || kind === 'voice', clip = kind === 'video';
+  at.innerHTML = '<span class="ai"></span><span class="an"></span><span class="as"></span>';
+  at.querySelector('.ai').textContent = playable || clip ? '▶' : kind === 'photo' || kind === 'sticker' ? 'P' : typeWord(a);
+  at.querySelector('.an').textContent = kind === 'voice' ? 'Voice message' : label; at.querySelector('.as').textContent = fmtSize(a.size);
+  if (S.audio && S.audio.key === m.id + ':' + ai) { S.audio.plate = at; paintAudio(); }
+  at.onclick = () => playable ? playAudio(m, ai, at) : clip ? openViewer(m, ai) : openAttachment(m, ai);
+  return at;
+}
+function paintAudio() {
+  const A = S.audio; if (!A || !A.plate) return;
+  A.plate.classList.toggle('playing', !A.el.paused);
+  A.plate.querySelector('.ai').textContent = A.el.paused ? '▶' : '❚❚';
+  A.plate.querySelector('.as').textContent = A.el.duration ? fmtDur(A.el.currentTime) + ' / ' + fmtDur(A.el.duration) : '';
+}
+function stopAudio() {
+  if (!S.audio) return;
+  const A = S.audio; S.audio = null; A.el.pause(); A.el.removeAttribute('src'); A.el.load();
+  if (A.plate && A.plate.isConnected) { A.plate.classList.remove('playing'); A.plate.querySelector('.ai').textContent = '▶'; }
+}
+async function playAudio(m, i, plate) {
+  const key = m.id + ':' + i;
+  if (S.audio && S.audio.key === key) { S.audio.plate = plate; S.audio.el.paused ? S.audio.el.play() : S.audio.el.pause(); return; }
+  stopAudio(); say('Loading...');
+  try {
+    const r = await fetchMedia(m, i), el = new Audio(Platform.files.audioUrl(r.path));
+    const A = S.audio = {key, el, plate};
+    el.onplay = el.onpause = el.ontimeupdate = el.onloadedmetadata = paintAudio;
+    el.onended = () => { el.currentTime = 0; paintAudio(); };
+    el.onerror = async () => {
+      if (!el.dataset.again) { el.dataset.again = '1'; try { const r2 = await refetch(m, i); el.src = Platform.files.audioUrl(r2.path); await el.play(); return; } catch (e) { /* falls through */ } }
+      say('This sound cannot be played here. Tap the message in Files to open it.', true); if (S.audio === A) stopAudio();
+    };
+    say(''); await el.play();
+  } catch (e) { if (e.name !== 'AbortError') say(e.message || 'Cannot play', true); }
+}
+
+// the viewer: the pictures and clips of this conversation, one at a time
+function viewables() {
+  const out = [];
+  for (const m of S.msgs) (m.attachments || []).forEach((a, ai) => { if (VIEWABLE.includes(a.kind) && (a.kind === 'video' || showable(a))) out.push({m, ai, a}); });
+  return out;
+}
+function openViewer(m, ai) {
+  stopAudio();
+  const items = viewables(), idx = items.findIndex(x => x.m.id === m.id && x.ai === ai);
+  if (idx < 0) return;
+  S.viewer = {items, idx}; $('#viewer').classList.add('on'); showViewer();
+}
+async function showViewer() {
+  const V = S.viewer; if (!V) return;
+  const it = V.items[V.idx], st = $('#vstage'), me = V.token = {};
+  st.innerHTML = ''; st.textContent = 'Loading...';
+  $('#vcount').textContent = (V.idx + 1) + ' / ' + V.items.length;
+  $('#vcap').textContent = [it.m.outgoing ? 'You' : it.m.sender_name, it.m.text].filter(Boolean).join(': ');
+  $('#vprev').style.visibility = V.idx > 0 ? '' : 'hidden'; $('#vnext').style.visibility = V.idx < V.items.length - 1 ? '' : 'hidden';
+  try {
+    const r = await fetchMedia(it.m, it.ai);
+    if (V.token !== me) return;                         // the owner has moved on
+    st.textContent = '';
+    if (it.a.kind === 'video') {
+      const v = document.createElement('video'); v.controls = true; v.autoplay = true; v.src = Platform.files.videoUrl(r.path);
+      v.onerror = async () => {
+        if (!v.dataset.again) { v.dataset.again = '1'; try { v.src = Platform.files.videoUrl((await refetch(it.m, it.ai)).path); return; } catch (e) { /* falls through */ } }
+        st.textContent = 'This clip cannot be played here. Save it and open it elsewhere (Save).';
+      };
+      st.appendChild(v); V.video = v;
+    } else {
+      const im = document.createElement('img'); im.src = Platform.files.imageUrl(r.path);
+      im.onerror = async () => {
+        if (!im.dataset.again) { im.dataset.again = '1'; try { im.src = Platform.files.imageUrl((await refetch(it.m, it.ai)).path); return; } catch (e) { /* falls through */ } }
+        st.textContent = 'This picture cannot be shown here. Save it (Save).';
+      };
+      st.appendChild(im); V.video = null;
+    }
+  } catch (e) { if (V.token === me) st.textContent = e.message; }
+}
+function closeViewer() { S.viewer = null; $('#viewer').classList.remove('on'); $('#vstage').innerHTML = ''; }
+function stepViewer(d) { const V = S.viewer; if (!V) return; const n = V.idx + d; if (n < 0 || n >= V.items.length) return; V.idx = n; showViewer(); }
+async function saveViewer() {
+  const V = S.viewer; if (!V) return; const it = V.items[V.idx];
+  $('#vcap').textContent = 'Saving...';
+  try { const r = await post('download', {conv: S.chat.id, id: it.m.id, index: it.ai}); $('#vcap').textContent = 'Saved: ' + r.path; }
+  catch (e) { $('#vcap').textContent = e.message; }
+}
+$('#vprev').onclick = () => stepViewer(-1); $('#vnext').onclick = () => stepViewer(1);
+$('#vclose').onclick = closeViewer; $('#vsave').onclick = saveViewer;
+
 function tick(m) {
   if (!m.outgoing) return '';
   return {queued: '...', sent: '✓', delivered: '✓✓', read: '✓✓', failed: 'not sent'}[m.state] || '';
@@ -306,13 +458,7 @@ function drawMsgs(keepBottom = true) {
     const d = document.createElement('div');
     d.className = 'm' + (m.outgoing ? ' out' : ''); d.style.setProperty('--c', color(c.service));
     if (!m.outgoing && c.kind !== 'dm' && m.sender_name) { const w = document.createElement('div'); w.className = 'who'; w.textContent = m.sender_name; d.appendChild(w); }
-    (m.attachments || []).forEach((a, ai) => {
-      const at = document.createElement('div'); at.className = 'att';
-      at.innerHTML = `<span class="ai">${{photo: 'P', video: 'V', audio: 'A', voice: 'A'}[a.kind] || 'F'}</span><span class="an"></span><span class="as"></span>`;
-      at.querySelector('.an').textContent = a.name || a.kind || 'file'; at.querySelector('.as').textContent = fmtSize(a.size);
-      at.onclick = () => openAttachment(m, ai); at.setAttribute('role', 'button');
-      d.appendChild(at);
-    });
+    (m.attachments || []).forEach((a, ai) => d.appendChild(attNode(m, a, ai)));
     if (m.text || !(m.attachments || []).length) d.appendChild(bodyNode(m.text, mail));
     const meta = document.createElement('div'); meta.className = 'meta' + (m.state === 'failed' ? ' failed' : '');
     meta.textContent = new Date(m.ts * 1000).toTimeString().slice(0, 5) + (m.outgoing ? '  ' + tick(m) : '');
@@ -431,6 +577,7 @@ async function reloadChat() {
 }
 $('#bback').onclick = leaveChat;
 function leaveChat() {
+  closeViewer(); stopAudio();
   S.chat = null; $('#text').blur();
   if (S.fromSearch) { S.fromSearch = false; show('search'); drawHits(); return; }    // back to the results it came from
   show('list'); loadList();
@@ -532,6 +679,13 @@ addEventListener('keydown', e => {
   if (S.dlg) return;
   if (inField) return;
   const stop = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+  if (S.viewer) {                                                      // the viewer has the keys: B closes, arrows move, A pauses a clip / saves a picture
+    if (k === 'Escape') { stop(); closeViewer(); }
+    else if (k === 'ArrowLeft') { stop(); stepViewer(-1); }
+    else if (k === 'ArrowRight') { stop(); stepViewer(1); }
+    else if (k === 'Enter') { stop(); const v = S.viewer.video; if (v) { v.paused ? v.play() : v.pause(); } else saveViewer(); }
+    return;
+  }
   if (S.screen === 'list') {
     if (k === 'ArrowDown') { stop(); selectRow(S.sel + 1); }
     else if (k === 'ArrowUp') { stop(); selectRow(S.sel - 1); }
@@ -595,6 +749,18 @@ Platform.tools.handle('show_chat', async a => {
   if (!c) throw new Error('no conversation matching "' + a.chat + '" in this list (' + S.role + ')');
   await openChat(c);
   return 'Showing "' + c.title + '" (' + c.service + ')';
+});
+Platform.tools.handle('show_attachment', async a => {
+  const want = String(a.chat || '').toLowerCase();
+  if (!S.convs.length || S.filter !== 'all') { S.filter = 'all'; await loadList(); }
+  const c = S.convs.find(x => x.id === a.chat) || S.convs.find(x => String(x.title || '').toLowerCase().includes(want));
+  if (!c) throw new Error('no conversation matching "' + a.chat + '" in this list (' + S.role + ')');
+  await openChat(c);
+  const m = S.msgs.find(x => x.id === Number(a.id)), i = Number(a.index || 0), at = m && (m.attachments || [])[i];
+  if (!at) throw new Error('message ' + a.id + ' has no attachment ' + i + ' among the ' + S.msgs.length + ' loaded');
+  if (at.kind === 'audio' || at.kind === 'voice') { await playAudio(m, i, null); return 'Playing ' + (at.name || at.kind); }
+  if (at.kind === 'video' || showable(at)) { openViewer(m, i); return 'Showing ' + (at.name || at.kind) + ' in the viewer'; }
+  throw new Error('a ' + at.kind + ' has no viewer: fetch it with messages_attachment');
 });
 Platform.tools.handle('show_list', async a => {
   const service = String(a.service || 'all');

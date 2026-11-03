@@ -32,7 +32,7 @@ Pages are served from `web-shell/` (`/`, `/platform.js`), `/apps/<id>/…` and `
 | Apps | `apps`, `launch`, `launch-arg`, `open`, `close`, `running`, `app/<id>/<path>` (passthrough to an app's service endpoint) |
 | Services | `services`, `services/start`, `/stop`, `/limit`, `/register`, `window/takeover` |
 | Input and power | `hw`, `hw/button`, `hw/stick`, `hw/touch`, `hw/battery`, `power`, `power/sleep`, `osk/typing`, `beep` |
-| Files (storage card only) | `fs/list`, `read`, `write`, `mkdir`, `rename`, `copy`, `move`, `delete`, `space`, `fs/audio`, `fs/video` |
+| Files (storage card only) | `fs/list`, `read`, `write`, `mkdir`, `rename`, `copy`, `move`, `delete`, `space`, `fs/audio`, `fs/video`, `fs/image` |
 | System API | `msgbox`, `msgbox/result`, `msgbox/cancel`, `sound/list`, `sound/play`, `vibra`, `vibra/pulse`, `vibra/stop` ([SYSTEM_API.md](SYSTEM_API.md)) |
 | Notifications | `notify`, `notifications/list`, `/dismiss`, `/clear`, `/read`, `/dnd` |
 | Settings, time, network | `settings`, `settings/set`, `time/status`, `time/set`, `time/zone`, `time/zones`, `time/ntp`, `net/status`, `net/scan`, `net/connect` |

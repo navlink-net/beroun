@@ -2,7 +2,7 @@
 // IntelliCat platform script: what every web app includes (<script src="/platform.js"></script>).
 //   Platform.onClose(async () => {...})   called when the user presses MODE; save here. The app is killed 2 s later if it has not finished.
 //   Platform.exit()                       the app asks to be closed
-//   Platform.files.list(path, ext) / .read / .write(path, text, {create}) / .space() / .mkdir / .rename(path, name) / .copy(path, toDir) / .move / .remove / .open(path) / .audioUrl(path) / .videoUrl(path)   files inside the home directory (the SD card) only; audioUrl / videoUrl: the address of an audio / video file for <audio src> / <video src> (seekable)
+//   Platform.files.list(path, ext) / .read / .write(path, text, {create}) / .space() / .mkdir / .rename(path, name) / .copy(path, toDir) / .move / .remove / .open(path) / .audioUrl(path) / .videoUrl(path) / .imageUrl(path)   files inside the home directory (the SD card) only; audioUrl / videoUrl / imageUrl: the address of an audio / video / image file (jpg, png, gif, webp, bmp) for <audio src> / <video src> / <img src> (seekable)
 //   Platform.launchArg()                  what the app was started with ({open: path} from the file manager), once; null otherwise
 //   Platform.db.get(key) / .set(key, value)   the launcher database: this app's own settings
 //   Platform.state.get() / .set(obj)     the app's state for the shared window: set it in onClose, read it at the start; the app comes back to the same place
@@ -141,6 +141,7 @@
     open: path => post('/api/open', {path}),
     audioUrl: path => '/api/fs/audio?path=' + encodeURIComponent(path),
     videoUrl: path => '/api/fs/video?path=' + encodeURIComponent(path),
+    imageUrl: path => '/api/fs/image?path=' + encodeURIComponent(path),
   };
   const db = {
     get: key => call('/api/db/get?key=' + encodeURIComponent(key)).then(r => r.value),

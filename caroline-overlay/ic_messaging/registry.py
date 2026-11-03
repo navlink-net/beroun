@@ -7,7 +7,7 @@ keeps the change log the app polls. Both users of an account call the same metho
 """
 import asyncio, logging, mimetypes, os, re, threading, time, uuid
 
-from . import actors
+from . import actors, media
 from .adapter import AdapterError, Context, ROLES, SERVICES
 
 log = logging.getLogger("ic_messaging")
@@ -291,7 +291,8 @@ class Registry:
         name = os.path.basename(path)
         caption = (caption or "").strip()
         ref = uuid.uuid4().hex
-        att = [{"kind": "file", "name": name, "size": os.path.getsize(path), "mime": mimetypes.guess_type(name)[0] or "", "ref": ""}]
+        mime = media.mime_of(name)
+        att = [{"kind": media.kind_of(mime, name), "name": name, "size": os.path.getsize(path), "mime": mime, "ref": "", "local": path}]   # local: shown from the file we sent
         pending, _ = self.store.add_message({
             "conv": conv_id, "account": a.account_id, "ext_id": None, "client_ref": ref, "sender": "me", "sender_name": "",
             "ts": time.time(), "text": caption, "outgoing": True, "state": "queued", "actor": actor, "attachments": att})
@@ -339,6 +340,39 @@ class Registry:
         except Exception as e:
             raise AdapterError(f"download failed: {e}", "send-failed") from e
         return got or dest
+
+    async def cached(self, conv_id, message_id, index, cache_dir, home=None):
+        """One attachment to be shown: the file we sent (still where it was, inside `home`), else the copy in cache_dir, fetched on the first
+        call only. Returns (path, attachment). The cache is trimmed after each fetch; Downloads is not touched."""
+        conv = self.store.get_conversation(conv_id)
+        m = self.store.get_message(int(message_id))
+        if conv is None or m is None or m["conv"] != conv_id:
+            raise AdapterError("no such message", "not-found")
+        atts = m.get("attachments") or []
+        if not 0 <= int(index) < len(atts):
+            raise AdapterError("no such attachment", "not-found")
+        att = atts[int(index)]
+        local = att.get("local")
+        if local and os.path.isfile(local) and home and os.path.realpath(local).startswith(home + os.sep):
+            return os.path.realpath(local), att
+        os.makedirs(cache_dir, exist_ok=True)
+        dest = os.path.join(cache_dir, f"{int(message_id)}-{int(index)}-{media.ensure_ext(att.get('name'), att.get('mime', ''), att.get('kind', 'file'))}")
+        if os.path.isfile(dest) and os.path.getsize(dest) > 0:
+            os.utime(dest, None)                          # used: it stays longer
+            return dest, att
+        part = dest + ".part"
+        try:
+            got = await self.adapter(conv["account"]).download(att.get("ref") or "", part)
+            os.replace(got or part, dest)
+        except AdapterError:
+            raise
+        except Exception as e:
+            raise AdapterError(f"download failed: {e}", "send-failed") from e
+        finally:
+            if os.path.exists(part):
+                os.remove(part)
+        media.trim(cache_dir, keep=dest)
+        return dest, att
 
     def set_muted(self, conv_id, muted):
         if not self.store.set_muted(conv_id, muted):

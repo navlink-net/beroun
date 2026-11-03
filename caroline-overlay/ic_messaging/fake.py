@@ -227,6 +227,11 @@ class FakeAdapter(Adapter):
 
     async def download(self, ref, dest):
         """The scripted attachments carry their text in the ref ("fake:<text>"): the file is that text."""
+        if ref.startswith("fakeb64:"):                 # a scripted picture, clip or voice message: the bytes are in the ref
+            import base64
+            with open(dest, "wb") as f:
+                f.write(base64.b64decode(ref[8:]))
+            return dest
         if not ref.startswith("fake:"):
             raise AdapterError("nothing to download", "not-found")
         with open(dest, "w", encoding="utf-8") as f:

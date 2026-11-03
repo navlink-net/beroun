@@ -1641,6 +1641,10 @@ VIDEO_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", 
                ".mov": "video/quicktime", ".ogv": "video/ogg"}
 
 
+IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
+               ".bmp": "image/bmp"}      # no svg: a page of the card must not run as a document of the shell's origin
+
+
 def fs_audio(rel, types=AUDIO_TYPES):
     """(real path, content type) of an audio (or, with VIDEO_TYPES, a video) file of the card, for streaming to a media element."""
     f = fs_resolve(rel)
@@ -2425,6 +2429,8 @@ class H(BaseHTTPRequestHandler):
             return self._audio(q.get("path", ""))
         if path == "/api/fs/video":
             return self._audio(q.get("path", ""), VIDEO_TYPES)
+        if path == "/api/fs/image":
+            return self._audio(q.get("path", ""), IMAGE_TYPES)
         hit = EXTENSIONS.find("GET", path)
         if hit:
             return self._ext_call(hit, q)

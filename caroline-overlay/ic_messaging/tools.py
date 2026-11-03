@@ -5,7 +5,9 @@ Loaded by her plugin loader (hooks.py puts this folder's plugin module on the ap
 calls, so a message sent from the app is in `messages_history` and one she sent is in the app. What she reads is somebody else's text: it goes
 to her inside the same untrusted markers every incoming message gets (app/untrusted_text.py).
 """
-import time
+import os, time
+
+from . import media
 
 try:
     from app.untrusted_text import third_party_label, third_party_text
@@ -29,7 +31,9 @@ def _fmt(m, title=None):
     head = f"#{m['id']} {when} {who}{subj} ({m['state']}{', ' + m['actor'] if m.get('actor') else ''})"
     if title:
         head = f"{title}: " + head
-    return head + "\n" + third_party_text(m["text"], who)
+    atts = "".join(f"\n[attachment {i}: {a.get('kind', 'file')} {third_party_label(a.get('name'))}"
+                   f"{', ' + str(a['size']) + ' bytes' if a.get('size') else ''}]" for i, a in enumerate(m.get("attachments") or []))
+    return head + atts + "\n" + third_party_text(m["text"], who)
 
 
 def _account_filters(args):
@@ -106,6 +110,34 @@ async def messages_mark_read(args, _rp):
     return {"text": f"marked {res['marked']} message(s) of {conv['title']} as read."}
 
 
+TEXT_PEEK = 8192                                       # a text attachment this small is handed over as text; anything else as a path
+
+
+async def messages_attachment(args, _rp):
+    """Fetch one attachment of a stored message into the device's cache and say where it is (a path inside the home, which the file tools read)."""
+    conv, error = _find(args)
+    if error:
+        return error
+    from .api import home_root
+    root = home_root()
+    if not root:
+        return {"text": "the device home is not known here."}
+    try:
+        mid, idx = int(args.get("id")), int(args.get("index") or 0)
+    except (TypeError, ValueError):
+        return {"text": "id is needed: the number after # in messages_history."}
+    try:
+        path, att = await _reg().cached(conv["id"], mid, idx, os.path.join(root, media.CACHE_DIR), home=root)
+    except Exception as e:                              # AdapterError: not found, offline, expired on the service
+        return {"text": f"cannot fetch the attachment: {e}"}
+    rel = os.path.relpath(os.path.realpath(path), root).replace(os.sep, "/")
+    size = os.path.getsize(path)
+    out = f"{att.get('kind', 'file')} {third_party_label(att.get('name'))}, {att.get('mime') or 'unknown type'}, {size} bytes, at {rel} on the device (inside the home; read it with the file tools)."
+    if (att.get("mime") or "").startswith("text/") and size <= TEXT_PEEK:
+        out += "\n" + third_party_text(open(path, encoding="utf-8", errors="replace").read(), "attachment")
+    return {"text": out}
+
+
 def make_plugin():
     from app.plugins.loader import Plugin, PluginTool
     account_help = '`account` is optional: a service ("telegram", "whatsapp", "signal", "slack", "mail"), a role ("owner" = the human\'s account, "self" = your own) or both ("telegram:owner").'
@@ -120,6 +152,9 @@ def make_plugin():
                        {"query": str, "account": str | None, "chat": str | None, "since": float | None, "n": int | None}, messages_search),
             PluginTool("messages_unread", "List conversations with unread messages across all services. " + account_help,
                        {"account": str | None}, messages_unread),
+            PluginTool("messages_attachment", "Fetch one attachment of a stored message (the `[attachment N: ...]` lines of messages_history) and get its path on the device. "
+                       "`id` is the number after # in messages_history, `index` the attachment number (default 0). A small text file comes back as text. " + account_help,
+                       {"chat": str, "id": int, "index": int | None, "account": str | None}, messages_attachment),
             PluginTool("messages_mark_read", "Mark a conversation's messages as read (in the shared store and, where the service supports it, on the service). " + account_help,
                        {"chat": str, "account": str | None}, messages_mark_read),
         ],

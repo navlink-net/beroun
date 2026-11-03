@@ -2,7 +2,7 @@
   "format": 1,
   "id": "communicator",
   "name": "Communicator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "permissions": ["caroline.ask"],
   "icon": "icon.svg",
   "frontend": {"entry": "index.html", "window": "shared"},
@@ -27,6 +27,7 @@
     "tools": [
       {"name": "current_view", "description": "What the window shows: the open conversation, or the list and its filter", "input": {}},
       {"name": "show_chat", "description": "Opens a conversation in the window: its id or a part of its title", "input": {"chat": "string"}},
+      {"name": "show_attachment", "description": "Opens a picture or clip of a conversation in the viewer, or plays a voice message: the conversation, the message id (the number after # in messages_history) and the attachment number", "input": {"chat": "string", "id": "number", "index": "number?"}},
       {"name": "show_list", "description": "Shows the list of conversations: service all, mail, whatsapp, telegram, signal or slack; role owner or self", "input": {"service": "string?", "role": "string?"}}
     ]
   }

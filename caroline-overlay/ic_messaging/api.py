@@ -9,6 +9,7 @@ import os
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
 
+from . import media
 from .adapter import AdapterError
 from .registry import ACTOR_APP
 
@@ -157,6 +158,21 @@ def build_router(reg, fake=False):
                 raise AdapterError("the device home is not known", "bad-request")
             got = await reg.download(b.get("conv", ""), b.get("id", 0), b.get("index", 0), os.path.join(root, DOWNLOADS))
             return {"path": os.path.relpath(os.path.realpath(got), root).replace(os.sep, "/")}
+        except AdapterError as e:
+            return err(e)
+
+    @r.post("/attachment")
+    async def attachment(request: Request):
+        """{conv, id, index} -> the attachment is fetched into the cache (once) to be shown, not saved: the answer has its path relative to
+        the home (for Platform.files.imageUrl / audioUrl / videoUrl), kind, mime, name and size. /download is the owner's copy in Downloads."""
+        b = await body(request)
+        try:
+            root = home_root()
+            if not root:
+                raise AdapterError("the device home is not known", "bad-request")
+            got, att = await reg.cached(b.get("conv", ""), b.get("id", 0), b.get("index", 0), os.path.join(root, media.CACHE_DIR), home=root)
+            return {"path": os.path.relpath(os.path.realpath(got), root).replace(os.sep, "/"), "kind": att.get("kind", "file"),
+                    "mime": att.get("mime", ""), "name": att.get("name", ""), "size": os.path.getsize(got)}
         except AdapterError as e:
             return err(e)
 

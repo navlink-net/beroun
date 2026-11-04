@@ -22,9 +22,18 @@ Every book has an `id` and a scope: `public` (default) or `mine`.
 
 Read the text before you retell it or answer about it; do not guess a plot from the title.
 
+## Bookmarks and font size
+
+Bookmarks belong to the owner and to one book; they are kept on the site as well, so the same list shows on the other devices and in the web reader.
+
+- `list_bookmarks` gives them in reading order (each with a fragment of the text and the percent).
+- `add_bookmark` needs a chapter and a block: take them from `search_in_book`, from `read_chapter` (the block you read) or from `book_contents`. Add one when the owner says "remember this place" / "bookmark that".
+- `remove_bookmark` takes the id from `list_bookmarks`.
+- `reading_settings` without arguments tells the font size (percent, 100 = normal) and the page theme; with `fontScale` (50-300) or `theme` it changes them ("make the letters bigger" = about +20).
+
 ## On the screen
 
-`books_open_book` opens a book in the reader at the owner's place; `books_page_text` is the page the owner sees now and `books_where_am_i` the chapter. Use them only when the owner is reading right now ("what does this mean?", "who is this character?").
+`books_open_book` opens a book in the reader at the owner's place; `books_page_text` is the page the owner sees now, `books_where_am_i` the chapter and `books_bookmark_here` puts a bookmark on that page. Use them only when the owner is reading right now ("what does this mean?", "who is this character?").
 
 ## Do not
 

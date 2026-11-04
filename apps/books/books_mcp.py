@@ -58,6 +58,14 @@ TOOLS = [
     ("read_chapter", "The text of a chapter, up to max_chars (default 12000) from from_block; next_block tells where to go on", {"id": S, "scope": S, "chapter": N, "from_block": N, "max_chars": N}, read_chapter),
     ("search_in_book", "Places in a book where the words occur: chapter, block and a fragment", {"id": S, "scope": S, "q": S},
      lambda a: call("GET", "find", query={"scope": scope(a), "id": a.get("id"), "q": a.get("q", "")})),
+    ("list_bookmarks", "The bookmarks of a book in reading order: id, chapter, block, a fragment of the text, percent. They are the owner's, the same on the device and on the web", {"id": S, "scope": S},
+     lambda a: call("GET", "bookmarks", query={"scope": scope(a), "id": a.get("id")})),
+    ("add_bookmark", "Adds a bookmark in a book at chapter and block (see book_contents, search_in_book); label is optional", {"id": S, "scope": S, "chapter": N, "block": N, "label": S},
+     lambda a: call("POST", "bookmark", {"scope": scope(a), "id": a.get("id"), "chapter": a.get("chapter", 0), "block": a.get("block", 0), "label": a.get("label", "")})),
+    ("remove_bookmark", "Removes a bookmark of a book by its id (from list_bookmarks)", {"id": S, "scope": S, "bookmark_id": S},
+     lambda a: call("POST", "unbookmark", {"scope": scope(a), "id": a.get("id"), "bookmark_id": a.get("bookmark_id")})),
+    ("reading_settings", "The reading settings of the owner (fontScale in percent, 100 = normal; theme dark or light); pass fontScale (50-300) and/or theme to change them", {"fontScale": N, "theme": S},
+     lambda a: call("POST", "settings", {k: a[k] for k in ("fontScale", "theme") if k in a}) if ("fontScale" in a or "theme" in a) else call("GET", "settings")),
     ("recent_books", "The books the owner is reading, with the chapter and percent where they stopped", {}, lambda a: call("GET", "recent")),
 ]
 
@@ -65,7 +73,7 @@ TOOLS = [
 def handle(msg):
     m = msg.get("method")
     if m == "initialize":
-        return {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "books", "version": "1.0.0"}}
+        return {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "books", "version": "1.1.0"}}
     if m == "tools/list":
         return {"tools": [{"name": n, "description": d, "inputSchema": {"type": "object", "properties": p}} for n, d, p, _ in TOOLS]}
     if m == "tools/call":

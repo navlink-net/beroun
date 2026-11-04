@@ -19,6 +19,17 @@ The page and Caroline's MCP server reach it through the shell (/api/app/books/<p
     GET  find?scope=&id=&q=     {matches: [{chapter, block, text}]}
     POST progress               {scope, id, chapter, block, pct}
     GET  status                 {state, cache_mb, books}
+    GET  bookmarks?scope=&id=   {bookmarks: [{id, chapter, block, pct, text, chapterTitle, label, at, device}]}   in reading order
+    POST bookmark               {scope, id, chapter, block, label?}   adds a bookmark at that place -> {bookmark, bookmarks}
+    POST unbookmark             {scope, id, bookmark_id}              -> {bookmarks}
+    GET  settings               {fontScale, theme}                    font scale in percent (100 = the base size), theme dark|light
+    POST settings               {fontScale?, theme?}                  -> the settings now in force
+
+Bookmarks, the reading place and the settings are kept on the site too (the plugin `Books`, apps/Books in the reforce repo, per account), so the web reader and every
+device read a book the same way. The device's copy is the working one: a change is saved here at once, queued, and sent when the site answers (a poor or no link only
+delays it); what the site holds is pulled when a book is opened. A place or a bookmark is an anchor that does not depend on the FB2 parser of the client: chapter and
+block (a hint), the start of the paragraph's text (the real anchor) and the percent of the book (the last resort); see locate(). The book of the site is
+"<scope>:<file name>", the same on every client.
 
 The key of the site's pages (it is in every page of squirrelwisdom.com, not a secret of the account) is $INTELLICAT_BOOKS_KEY or "books_key" in ~/.intellicat/keys.json
 ($INTELLICAT_KEYS); it is not in this repository. The address of the site is $INTELLICAT_SW_URL (the shell's setting; a test points it at a stand-in).
@@ -28,6 +39,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import threading
 import time
@@ -45,6 +57,8 @@ DATA = os.path.join(os.environ.get("INTELLICAT_DATA", os.path.expanduser("~/.int
 CACHE_MB = float(os.environ.get("BOOKS_CACHE_MB") or 300)      # parsed books kept on the device; the least recently opened go first
 LIST_TTL_S = float(os.environ.get("BOOKS_LIST_TTL_S") or 300)  # a catalog is asked again after this
 MAX_BOOK_BYTES = 40 * 1024 * 1024
+MAX_BOOKMARKS = 300                                           # per book, as on the site
+DEVICE = "beroun"
 FB2_BLOCKS = ("p", "subtitle", "empty-line", "poem", "cite", "epigraph", "text-author")
 
 lock = threading.RLock()
@@ -82,13 +96,14 @@ RETRIES = int(os.environ.get("BOOKS_RETRIES") or 3)               # tries of one
 RETRY_PAUSE_S = float(os.environ.get("BOOKS_RETRY_PAUSE_S") or 1.5)   # the pause before the second try; doubled for each next one
 
 
-def with_retries(fn, what):
+def with_retries(fn, what, tries=None):
     """Runs fn(); a network failure (or a 5xx of the site) is tried again after a growing pause, any other error at once."""
-    for attempt in range(RETRIES):
+    tries = tries or RETRIES
+    for attempt in range(tries):
         try:
             return fn()
         except BooksError as e:
-            if e.kind != "network" or attempt == RETRIES - 1:
+            if e.kind != "network" or attempt == tries - 1:
                 raise
             pause = RETRY_PAUSE_S * 2 ** attempt
             log(what, "failed:", e, f"- again in {pause:g} s ({attempt + 2}/{RETRIES})")
@@ -201,6 +216,195 @@ def write_state(d):
     save_json("read.json", d)
 
 
+# ---- the site's copy of the reading state (bookmarks, place, settings) ----------------------------------------------------------------------
+
+SYNC_TIMEOUT_S = float(os.environ.get("BOOKS_SYNC_TIMEOUT_S") or 10)
+SYNC_BACKOFF_S = float(os.environ.get("BOOKS_SYNC_BACKOFF_S") or 60)       # after a failed call the site is left alone for this long
+REJECT_BACKOFF_S = float(os.environ.get("BOOKS_REJECT_BACKOFF_S") or 300)
+MAX_TRIES = 20                                                              # a queued change the site keeps refusing is dropped after this many tries
+MAX_PENDING = 500
+FONT_MIN, FONT_MAX = 50, 300
+state.update(offline_until=0.0)
+plock = threading.Lock()          # pending.json
+flush_guard = threading.Lock()    # one sender at a time
+
+
+def sw_call(action, **fields):
+    """One action of the site's plugin Books for the account (a v2 plugin:call); the plugin's result dict. kind: network | signin | config | rejected | service"""
+    key = books_key()
+    for attempt in (0, 1):
+        body = dict(fields, command="plugin:call", plugin="Books", query=action, action=action, session=session(fresh=bool(attempt)), key=key)
+        body[".msgid"] = int(time.time() * 1000)
+        req = urllib.request.Request(SW_URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
+
+        def ask():
+            try:
+                with urllib.request.urlopen(req, timeout=SYNC_TIMEOUT_S) as r:
+                    return json.loads(r.read())
+            except (urllib.error.URLError, OSError) as e:
+                raise BooksError("network", str(getattr(e, "reason", e)))
+            except ValueError:
+                raise BooksError("service", "The site answered with something else than JSON")
+        out = with_retries(ask, "Books." + action, tries=1)
+        if out.get(".status") == "ok" and isinstance(out.get("result"), dict):
+            return out["result"]
+        reason = str(out.get(".reason") or out.get("reason") or "refused")
+        if "session" in reason.lower():
+            if attempt == 0:
+                continue
+            raise BooksError("signin", reason)
+        raise BooksError("rejected", reason)
+    raise BooksError("signin", "The session was refused")
+
+
+def try_sync(fn):
+    """Runs fn() against the site. A failure never reaches the reader: the device's copy is used and the site is left alone for a while. (ok, result, error)"""
+    if time.time() < state["offline_until"]:
+        return False, None, None
+    try:
+        return True, fn(), None
+    except BooksError as e:
+        state["offline_until"] = time.time() + (REJECT_BACKOFF_S if e.kind == "rejected" else SYNC_BACKOFF_S)
+        log("site sync:", e.kind, e)
+        return False, None, e
+
+
+def queue(op):
+    """Adds a change to the queue of what the site has not got yet and starts sending. A newer place of a book / newer settings replace the older ones."""
+    with plock:
+        p = load_json("pending.json", [])
+        if op["op"] == "setPosition":
+            p = [x for x in p if not (x["op"] == "setPosition" and x["book"] == op["book"])]
+        elif op["op"] == "setSettings":
+            old = [x for x in p if x["op"] == "setSettings"]
+            if old:
+                op = {"op": "setSettings", "settings": dict(old[-1]["settings"], **op["settings"])}
+            p = [x for x in p if x["op"] != "setSettings"]
+        p.append(op)
+        save_json("pending.json", p[-MAX_PENDING:])
+    kick()
+
+
+def kick():
+    threading.Thread(target=flush, daemon=True).start()
+
+
+def flush():
+    if not flush_guard.acquire(blocking=False):
+        return
+    try:
+        while True:
+            with plock:
+                p = load_json("pending.json", [])
+            if not p:
+                return
+            op = p[0]
+            ok, _, err = try_sync(lambda: sw_call(op["op"], **{k: v for k, v in op.items() if k not in ("op", "tries")}))
+            with plock:
+                p = load_json("pending.json", [])
+                if ok:
+                    p = [x for x in p if x != op]
+                elif err is not None and err.kind == "rejected":
+                    op2 = dict(op, tries=op.get("tries", 0) + 1)
+                    p = [x for x in p if x != op] if op2["tries"] >= MAX_TRIES else [op2 if x == op else x for x in p]
+                save_json("pending.json", p)
+            if not ok:
+                return
+    finally:
+        flush_guard.release()
+
+
+def pending_for(sk):
+    with plock:
+        return [x for x in load_json("pending.json", []) if x.get("book") == sk]
+
+
+def apply_pending(items, sk):
+    """items {id: bookmark} with the queued adds and removes of the book laid over it."""
+    for op in pending_for(sk):
+        if op["op"] == "addBookmark":
+            items[op["bookmark"]["id"]] = op["bookmark"]
+        elif op["op"] == "removeBookmark":
+            items.pop(op["id"], None)
+    return items
+
+
+def server_key(scope, bid):
+    """The book's key on the site: <scope>:<file name>. None while the file name is not known (the book was never listed)."""
+    b = (_open["book"] if _open["key"] == book_key(scope, bid) else None) or load_json(os.path.join("books", book_key(scope, bid) + ".json"), None)
+    fn = (b or {}).get("filename")
+    if not fn:
+        got = state["lists"].get(scope)
+        for x in (got[1] if got else load_json(f"list-{scope}.json", [])):
+            if str(x.get("id")) == str(bid):
+                fn = x.get("filename")
+                break
+    return f"{scope}:{fn}" if fn else None
+
+
+def settings_now():
+    s = load_json("settings.json", {})
+    scale = s.get("fontScale")
+    return {"fontScale": scale if isinstance(scale, int) and FONT_MIN <= scale <= FONT_MAX else 100, "theme": "light" if s.get("theme") == "light" else "dark"}
+
+
+# ---- anchors: a place that does not depend on the parser of the client --------------------------------------------------------------
+
+def norm(s):
+    return re.sub(r"\s+", " ", str(s or "")).strip().lower()
+
+
+def block_pos(b, ci, bi):
+    total = sum(len(c["blocks"]) for c in b["chapters"])
+    return sum(len(c["blocks"]) for c in b["chapters"][:ci]) + bi, max(1, total)
+
+
+def anchor_of(b, ch, bl):
+    """The anchor of a place: the first block with text at or after (ch, bl)."""
+    chs = b["chapters"]
+    ch = max(0, min(len(chs) - 1, ch))
+    blocks = chs[ch]["blocks"]
+    bl = max(0, min(len(blocks) - 1, bl))
+    for i in range(bl, len(blocks)):
+        if blocks[i]["x"]:
+            bl = i
+            break
+    n, total = block_pos(b, ch, bl)
+    return {"chapter": ch, "block": bl, "pct": round(n / total * 100, 2), "text": blocks[bl]["x"][:120], "chapterTitle": chs[ch]["title"][:200]}
+
+
+def locate(b, a):
+    """(chapter, block) of an anchor in this parse of the book. 1. the hint, if the paragraph there starts as the anchor's text; 2. the paragraph with that start, the
+    nearest to the anchor's percent (the client that made it may have counted blocks differently); 3. the percent of the book."""
+    chs = b["chapters"]
+    ch, bl, key, pct = int(a.get("chapter") or 0), int(a.get("block") or 0), norm(a.get("text"))[:24], float(a.get("pct") or 0)
+    if key:
+        if 0 <= ch < len(chs) and 0 <= bl < len(chs[ch]["blocks"]) and norm(chs[ch]["blocks"][bl]["x"])[:24] == key:
+            return ch, bl
+        idx = b.get("_idx")
+        if idx is None:
+            idx = {}
+            total = sum(len(c["blocks"]) for c in chs) or 1
+            n = 0
+            for ci, c in enumerate(chs):
+                for bi, blk in enumerate(c["blocks"]):
+                    if blk["x"]:
+                        idx.setdefault(norm(blk["x"])[:24], []).append((ci, bi, n / total * 100))
+                    n += 1
+            b["_idx"] = idx
+        near = idx.get(key)
+        if near:
+            best = min(near, key=lambda c: abs(c[2] - pct))
+            return best[0], best[1]
+    total = sum(len(c["blocks"]) for c in chs)
+    left = int(pct / 100 * total)
+    for ci, c in enumerate(chs):
+        if left < len(c["blocks"]):
+            return ci, left
+        left -= len(c["blocks"])
+    return len(chs) - 1, max(0, len(chs[-1]["blocks"]) - 1)
+
+
 # ---- the catalogs -------------------------------------------------------------------------------------------------------------------------
 
 def catalog_paths(scope):
@@ -279,7 +483,35 @@ def op_catalog(q):
             "languages": sorted({b.get("language") for b in books if b.get("language")}), "genres": sorted({b.get("genre") for b in books if b.get("genre")}), "stale": stale}
 
 
+def pull_reading():
+    """The places of the books read on other devices (and on the web): a place of the site newer than the device's own becomes the device's place."""
+    ok, res, _ = try_sync(lambda: sw_call("listReading", limit=50))
+    if not ok:
+        return
+    with lock:
+        d = read_state()
+        changed = False
+        for sp in res.get("books", []):
+            scope, _, fn = str(sp.get("book", "")).partition(":")
+            if not valid_scope(scope):
+                continue
+            got = state["lists"].get(scope)
+            meta = next((x for x in (got[1] if got else load_json(f"list-{scope}.json", [])) if x.get("filename") == fn), None)
+            if not meta:
+                continue                       # a book of the site that this device's catalog does not list (yet)
+            k = f"{scope}:{meta['id']}"
+            old = d.get(k)
+            if old and old.get("ms", int(old.get("at", 0)) * 1000) >= sp.get("at", 0):
+                continue
+            d[k] = {"scope": scope, "id": str(meta["id"]), "title": sp.get("title") or meta.get("title") or "?", "author": sp.get("author") or meta.get("author") or "",
+                    "chapter": sp.get("chapter", 0), "block": sp.get("block", 0), "pct": sp.get("pct", 0), "text": sp.get("text", ""), "at": int(sp.get("at", 0) / 1000), "ms": sp.get("at", 0)}
+            changed = True
+        if changed:
+            write_state(d)
+
+
 def op_recent(q):
+    pull_reading()
     read = read_state()
     items = sorted(read.values(), key=lambda r: -r.get("at", 0))[:20]
     return {"books": [{"id": r["id"], "scope": r["scope"], "title": r.get("title") or "?", "author": r.get("author") or "", "chapter": r.get("chapter", 0), "pct": r.get("pct", 0),
@@ -439,7 +671,7 @@ def open_book(scope, bid):
         meta = find_book(scope, bid)
         _, base = catalog_paths(scope)
         book = parse_fb2(get_file(base + urllib.parse.quote(meta["filename"])))
-        book["id"], book["scope"] = str(bid), scope
+        book["id"], book["scope"], book["filename"] = str(bid), scope, meta["filename"]
         os.makedirs(path_of("books"), exist_ok=True)
         save_json(os.path.join("books", k + ".json"), book)
         evict()
@@ -453,13 +685,129 @@ def read_of(scope, bid):
     return {"chapter": r.get("chapter", 0), "block": r.get("block", 0), "pct": r.get("pct", 0)} if r else None
 
 
+def pull_book(scope, bid, b):
+    """What the site holds for this book: its bookmarks (the device's copy is replaced, the queued changes laid over it) and its place, if newer than the device's."""
+    sk = server_key(scope, bid)
+    if not sk:
+        return
+    ok, res, _ = try_sync(lambda: sw_call("getBook", book=sk))
+    if not ok:
+        return
+    items = apply_pending({x["id"]: x for x in res.get("bookmarks", []) if isinstance(x, dict) and x.get("id")}, sk)
+    with lock:
+        marks = load_json("marks.json", {})
+        marks[f"{scope}:{bid}"] = list(items.values())
+        save_json("marks.json", marks)
+        sp = res.get("position")
+        if sp:
+            d = read_state()
+            old = d.get(f"{scope}:{bid}")
+            if not old or old.get("ms", int(old.get("at", 0)) * 1000) < sp.get("at", 0):
+                ch, bl = locate(b, sp)
+                a = anchor_of(b, ch, bl)
+                d[f"{scope}:{bid}"] = {"scope": scope, "id": str(bid), "title": b["title"], "author": b["author"], "chapter": a["chapter"], "block": a["block"], "pct": a["pct"],
+                                       "text": a["text"], "at": int(sp["at"] / 1000), "ms": sp["at"]}
+                write_state(d)
+
+
+def bookmarks_of(scope, bid, b):
+    """The book's bookmarks in reading order, each placed in this parse of the book."""
+    out = []
+    for x in load_json("marks.json", {}).get(f"{scope}:{bid}", []):
+        ch, bl = locate(b, x)
+        out.append({"id": x["id"], "chapter": ch, "block": bl, "pct": x.get("pct", 0), "text": x.get("text", ""), "chapterTitle": x.get("chapterTitle", ""), "label": x.get("label", ""),
+                    "at": x.get("at", 0), "device": x.get("device", "")})
+    out.sort(key=lambda x: (x["chapter"], x["block"], x["at"]))
+    return out
+
+
 def op_book(q):
     scope, bid = valid_scope(q.get("scope", [""])[0]), q.get("id", [""])[0]
     if not scope or not bid:
         return {"error": "scope and id"}, 400
     b = open_book(scope, bid)
+    pull_book(scope, bid, b)
+    kick()
     return {"id": b["id"], "scope": scope, "title": b["title"], "author": b["author"], "annotation": b.get("annotation", ""),
-            "chapters": [{"title": c["title"], "blocks": len(c["blocks"])} for c in b["chapters"]], "read": read_of(scope, bid)}
+            "chapters": [{"title": c["title"], "blocks": len(c["blocks"])} for c in b["chapters"]], "read": read_of(scope, bid), "bookmarks": bookmarks_of(scope, bid, b)}
+
+
+def op_bookmarks(q):
+    scope, bid = valid_scope(q.get("scope", [""])[0]), q.get("id", [""])[0]
+    if not scope or not bid:
+        return {"error": "scope and id"}, 400
+    return {"bookmarks": bookmarks_of(scope, bid, open_book(scope, bid))}
+
+
+def op_bookmark(b):
+    scope, bid = valid_scope(b.get("scope")), str(b.get("id") or "")
+    if not scope or not bid:
+        return {"error": "scope and id"}, 400
+    try:
+        ch, bl = int(b.get("chapter", 0)), int(b.get("block", 0))
+    except (TypeError, ValueError):
+        return {"error": "chapter and block are numbers"}, 400
+    book = open_book(scope, bid)
+    mark = dict(anchor_of(book, ch, bl), id=secrets.token_urlsafe(9), label=str(b.get("label") or "")[:120], device=DEVICE, at=int(time.time() * 1000))
+    with lock:
+        marks = load_json("marks.json", {})
+        mine = marks.setdefault(f"{scope}:{bid}", [])
+        if any(x["chapter"] == mark["chapter"] and x["block"] == mark["block"] and x.get("text") == mark["text"] for x in mine):
+            return {"error": "this place already has a bookmark"}, 409
+        if len(mine) >= MAX_BOOKMARKS:
+            return {"error": f"a book holds at most {MAX_BOOKMARKS} bookmarks"}, 409
+        mine.append(mark)
+        save_json("marks.json", marks)
+    sk = server_key(scope, bid)
+    if sk:
+        queue({"op": "addBookmark", "book": sk, "bookmark": mark})
+    return {"bookmark": mark, "bookmarks": bookmarks_of(scope, bid, book)}
+
+
+def op_unbookmark(b):
+    scope, bid, mid = valid_scope(b.get("scope")), str(b.get("id") or ""), str(b.get("bookmark_id") or "")
+    if not scope or not bid or not mid:
+        return {"error": "scope, id and bookmark_id"}, 400
+    book = open_book(scope, bid)
+    with lock:
+        marks = load_json("marks.json", {})
+        marks[f"{scope}:{bid}"] = [x for x in marks.get(f"{scope}:{bid}", []) if x["id"] != mid]
+        save_json("marks.json", marks)
+    sk = server_key(scope, bid)
+    if sk:
+        queue({"op": "removeBookmark", "book": sk, "id": mid})
+    return {"bookmarks": bookmarks_of(scope, bid, book)}
+
+
+def pending_all():
+    with plock:
+        return load_json("pending.json", [])
+
+
+def op_settings(q):
+    ok, res, _ = try_sync(lambda: sw_call("getSettings"))
+    if ok and not [x for x in pending_all() if x["op"] == "setSettings"]:
+        s = res.get("settings") or {}
+        save_json("settings.json", dict(load_json("settings.json", {}), **{k: s[k] for k in ("fontScale", "theme") if k in s}))
+    return settings_now()
+
+
+def op_set_settings(b):
+    ch = {}
+    if "fontScale" in b:
+        try:
+            ch["fontScale"] = max(FONT_MIN, min(FONT_MAX, int(b["fontScale"])))
+        except (TypeError, ValueError):
+            return {"error": "fontScale is a number of percent"}, 400
+    if "theme" in b:
+        if b["theme"] not in ("dark", "light"):
+            return {"error": "theme is dark or light"}, 400
+        ch["theme"] = b["theme"]
+    if ch:
+        with lock:
+            save_json("settings.json", dict(load_json("settings.json", {}), **ch))
+        queue({"op": "setSettings", "settings": ch})
+    return settings_now()
 
 
 def op_text(q):
@@ -505,12 +853,20 @@ def op_progress(b):
         meta = open_book(scope, bid)
     except BooksError:
         meta = None
+    text = anchor_of(meta, ch, bl)["text"] if meta else ""
+    now = int(time.time() * 1000)
     with lock:
         d = read_state()
         old = d.get(f"{scope}:{bid}") or {}
         d[f"{scope}:{bid}"] = {"scope": scope, "id": bid, "title": (meta or {}).get("title") or old.get("title") or "?", "author": (meta or {}).get("author") or old.get("author") or "",
-                               "chapter": max(0, ch), "block": max(0, bl), "pct": max(0, min(100, round(pct, 1))), "at": int(time.time())}
+                               "chapter": max(0, ch), "block": max(0, bl), "pct": max(0, min(100, round(pct, 1))), "text": text, "at": now // 1000, "ms": now}
         write_state(d)
+        rec = d[f"{scope}:{bid}"]
+    sk = server_key(scope, bid)
+    if sk:
+        pos = {k: rec[k] for k in ("chapter", "block", "pct", "text", "title", "author")}
+        pos.update(at=now, device=DEVICE, chapterTitle=anchor_of(meta, ch, bl)["chapterTitle"] if meta else "")
+        queue({"op": "setPosition", "book": sk, "position": pos})
     return {"ok": True}
 
 
@@ -556,7 +912,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        self.route({"catalog": op_catalog, "recent": op_recent, "book": op_book, "text": op_text, "find": op_find, "status": op_status}, q)
+        self.route({"catalog": op_catalog, "recent": op_recent, "book": op_book, "text": op_text, "find": op_find, "status": op_status, "bookmarks": op_bookmarks, "settings": op_settings}, q)
 
     def do_POST(self):
         try:
@@ -565,13 +921,14 @@ class H(BaseHTTPRequestHandler):
             b = None
         if not isinstance(b, dict):
             return self.reply({"error": "the body is a JSON object"}, 400)
-        self.route({"progress": op_progress}, b)
+        self.route({"progress": op_progress, "bookmark": op_bookmark, "unbookmark": op_unbookmark, "settings": op_set_settings}, b)
 
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("INTELLICAT_SERVICE_PORT", "48805"))
     os.makedirs(DATA, exist_ok=True)
     log("booksd on", port)
+    kick()                                  # what an earlier run could not send
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 
 

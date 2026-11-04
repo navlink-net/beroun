@@ -6,7 +6,10 @@
 <!--
   Books: the FB2 books of squirrelwisdom.com (the public catalog and the owner's own), read on the device; booksd (manifest: services) downloads, parses and keeps them.
   The library: Left / Right change the tab (Reading, Public, My books), Up / Down choose, A opens (on the first row: search), B leaves.
-  The reader: Left / Right turn the page, Up / Down go to the previous / next chapter, A opens the menu (contents, search, font, light or dark), B goes back to the library.
+  The reader: Left / Right turn the page, Up / Down go to the previous / next chapter, A opens the menu (contents, bookmarks, search, font size, light or dark), B goes back to the library.
+  Bookmarks are per book. In the menu "Bookmark this page" adds one (the same item removes it); "Bookmarks" lists them: A goes to the place or deletes it. A starred page has one.
+  Font size: A on "Font size", then Left / Right change it in steps of 10% (70-200%), A keeps it, B cancels. The size, the light / dark page, the place and the bookmarks are kept
+  by booksd on the device and on the site (the account), so another device and the web reader show a book the same way.
   The place is kept as chapter and paragraph, so a change of the font size does not lose it. Only the cursor, A and B have a job.
 -->
 <style>
@@ -37,6 +40,7 @@
   /* the reader */
   #reader { display: none; flex: 1; min-height: 0; flex-direction: column; background: var(--bg); color: var(--fg); position: relative; }
   #rhead { flex: none; height: 26px; line-height: 26px; padding: 0 14px; font-size: 13px; background: var(--bar); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 10px; }
+  #rmark { flex: none; color: var(--head); }
   #rhead span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #page { flex: 1; min-height: 0; overflow: hidden; position: relative; padding: 0 16px; }
   #cols { height: 100%; overflow: hidden; column-gap: 0; column-fill: auto; }
@@ -51,7 +55,7 @@
 </style>
 <div id="tabs"></div>
 <div id="list"></div>
-<div id="reader" class="dark"><div id="rhead"><span id="rtitle"></span><span id="rpos"></span></div><div id="page"><div id="cols"></div></div></div>
+<div id="reader" class="dark"><div id="rhead"><span id="rtitle"></span><span id="rmark"></span><span id="rpos"></span></div><div id="page"><div id="cols"></div></div></div>
 <div id="msg"></div>
 <div id="ask"><label id="askLabel"></label><input id="askIn" type="text" autocomplete="off"></div>
 <div id="foot"></div>
@@ -62,7 +66,7 @@
   const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
   const T = s => Platform.t(s);
   const TABS = ['reading', 'public', 'mine'];
-  const SIZES = [18, 22, 26, 30];
+  const BASE_PX = 22, SCALE_MIN = 70, SCALE_MAX = 200, SCALE_STEP = 10;       // the font size is a percent of BASE_PX, the same number on every client
 
   let tab = 'public', filter = {q: '', language: ''}, books = [], langs = [];
   let rows = [], sel = 0;
@@ -70,8 +74,9 @@
   let menu = null;                         // {i, items: [{label, run}]}
   let picker = null;                       // {title, items: [{label, value}], i, done}
   let ask = null;
-  let prefs = {size: 22, theme: 'dark'};
-  let cur = null;                          // the open book {scope, id, title, chapters: [{title, blocks}], total}
+  let prefs = {scale: 100, theme: 'dark'};
+  let sizing = null;                       // {from}: Left / Right change the font size now
+  let cur = null;                          // the open book {scope, id, title, chapters: [{title, blocks}], total, bookmarks: [...]}
   let ch = 0, blocks = [], page = 0, pages = 1, bl = 0;   // chapter, its blocks, page, page count, the block at the top of the page
   let saveTimer = null;
 
@@ -147,7 +152,7 @@
       m.innerHTML = menu.items.map((x, i) => `<div class="${i === menu.i ? 'sel' : ''}">${esc(x.label)}</div>`).join('');
       if (!m.isConnected) $('reader').appendChild(m);
     } else if ($('menu')) $('menu').remove();
-    $('foot').textContent = picker ? T('A: choose · B: cancel') : reading ? (menu ? T('A: choose · B: close') : T('A: menu · Left/Right: page · B: library')) : T('A: open · Left/Right: tab · B: leave');
+    $('foot').textContent = picker ? T('A: choose · B: cancel') : reading ? (sizing ? T('Left/Right: font size · A: keep · B: cancel') : menu ? T('A: choose · B: close') : T('A: menu · Left/Right: page · B: library')) : T('A: open · Left/Right: tab · B: leave');
   }
 
   // ---- asking for a line of text -----------------------------------------------------------------
@@ -163,12 +168,13 @@
 
   // ---- the reader --------------------------------------------------------------------------------
   const colsW = () => $('page').clientWidth - 32;
+  const fontPx = () => Math.round(BASE_PX * prefs.scale / 100);
 
   function layout(keepBlock) {
     const c = $('cols'), w = colsW();
     c.style.width = w + 'px';
     c.style.columnWidth = w + 'px';
-    c.style.fontSize = prefs.size + 'px';
+    c.style.fontSize = fontPx() + 'px';
     pages = Math.max(1, Math.ceil(c.scrollWidth / w - 0.01));
     if (keepBlock !== undefined) page = pageOfBlock(keepBlock);
     page = Math.max(0, Math.min(pages - 1, page));
@@ -209,8 +215,29 @@
     return Math.min(100, (before + bl) / Math.max(1, cur.total) * 100);
   }
 
+  // the first and the last block that show on the page
+  function pageRange() {
+    const base = $('cols').getBoundingClientRect().left, w = colsW();
+    let lo = null, hi = null;
+    for (const el of $('cols').querySelectorAll('[data-b]')) {
+      const r = el.getClientRects();
+      let seen = false;
+      for (const q of r) if (q.right - base > 4 && q.left - base >= -2 && q.left - base < w - 4) seen = true;
+      if (seen) { const n = Number(el.dataset.b); if (lo === null) lo = n; hi = n; }
+      else if (r.length && r[0].left - base >= w) break;
+    }
+    return lo === null ? [bl, bl] : [lo, hi];
+  }
+  // the bookmarks that lie on the page now
+  function marksHere() {
+    if (!cur) return [];
+    const [lo, hi] = pageRange();
+    return cur.bookmarks.filter(m => m.chapter === ch && m.block >= lo && m.block <= hi);
+  }
+
   function head() {
     $('rtitle').textContent = cur ? cur.title : '';
+    $('rmark').textContent = sizing ? `${prefs.scale}%` : cur && marksHere().length ? '★' : '';
     $('rpos').textContent = cur ? `${ch + 1}/${cur.chapters.length} · ${page + 1}/${pages} · ${Math.round(pct())}%` : '';
   }
 
@@ -245,7 +272,7 @@
     say(T('Opening…'));
     try {
       const b = await api(`book?scope=${scope}&id=${encodeURIComponent(id)}`);
-      cur = {scope, id: b.id, title: b.title, author: b.author, chapters: b.chapters, total: b.chapters.reduce((s, c) => s + c.blocks, 0)};
+      cur = {scope, id: b.id, title: b.title, author: b.author, chapters: b.chapters, total: b.chapters.reduce((s, c) => s + c.blocks, 0), bookmarks: b.bookmarks || []};
       mode = 'read'; menu = null; say('');
       $('reader').className = prefs.theme;
       draw();
@@ -259,12 +286,43 @@
     await load(); draw();
   }
 
+  async function toggleBookmark() {
+    const here = marksHere();
+    try {
+      if (here.length) cur.bookmarks = (await api('unbookmark', {scope: cur.scope, id: cur.id, bookmark_id: here[0].id})).bookmarks;
+      else { await saveNow(); cur.bookmarks = (await api('bookmark', {scope: cur.scope, id: cur.id, chapter: ch, block: pageRange()[0]})).bookmarks; }
+    } catch (e) { if (e.message && /already has/.test(e.message)) return; throw e; }
+    head();
+  }
+
+  async function bookmarkList() {
+    if (!cur.bookmarks.length) { say(T('No bookmarks in this book')); setTimeout(() => say(''), 2000); return; }
+    const v = await choose(T('Bookmarks'), cur.bookmarks.map(m => ({label: `★ ${m.chapter + 1}. ${m.label || m.text || m.chapterTitle} · ${Math.round(m.pct)}%`, value: m})));
+    if (!v) return;
+    const a = await choose(v.label, [{label: T('Go to the place'), value: 'go'}, {label: T('Delete the bookmark'), value: 'del'}]);
+    if (!a) return;
+    if (a.value === 'go') await showChapter(v.value.chapter, v.value.block);
+    else { cur.bookmarks = (await api('unbookmark', {scope: cur.scope, id: cur.id, bookmark_id: v.value.id})).bookmarks; head(); }
+  }
+
+  function setScale(n) {
+    prefs.scale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, n));
+    layout(bl);
+  }
+  function endSizing(keep) {
+    if (!keep) setScale(sizing.from);
+    sizing = null; savePrefs(); head(); scheduleSave();
+  }
+
   function readerMenu() {
+    const here = marksHere().length > 0;
     menu = {i: 0, items: [
       {label: T('Contents'), run: async () => {
         const v = await choose(T('Contents'), cur.chapters.map((c, i) => ({label: c.title, value: i})), ch);
         if (v) await showChapter(v.value, 0);
       }},
+      {label: here ? T('Remove the bookmark of this page') : T('Bookmark this page'), run: toggleBookmark},
+      {label: `${T('Bookmarks')} (${cur.bookmarks.length})`, run: bookmarkList},
       {label: T('Search in the book'), run: async () => {
         const q = await prompt(T('Search in the book'), '');
         if (!q) return;
@@ -273,12 +331,12 @@
         const v = await choose(T('Found'), r.matches.map(m => ({label: `${m.chapter + 1}: ${m.text}`, value: m})));
         if (v) await showChapter(v.value.chapter, v.value.block);
       }},
-      {label: T('Font size') + ': ' + prefs.size, run: async () => { prefs.size = SIZES[(SIZES.indexOf(prefs.size) + 1) % SIZES.length]; savePrefs(); layout(bl); scheduleSave(); }},
+      {label: T('Font size') + ': ' + prefs.scale + '%', run: async () => { sizing = {from: prefs.scale}; head(); }},
       {label: prefs.theme === 'dark' ? T('Light page') : T('Dark page'), run: async () => { prefs.theme = prefs.theme === 'dark' ? 'light' : 'dark'; $('reader').className = prefs.theme; savePrefs(); }},
       {label: T('Library'), run: closeBook}]};
     draw();
   }
-  function savePrefs() { Platform.db.set('prefs', JSON.stringify(prefs)).catch(() => {}); }
+  function savePrefs() { api('settings', {fontScale: prefs.scale, theme: prefs.theme}).catch(() => {}); }
 
   // ---- keys --------------------------------------------------------------------------------------
   async function activate(r) {
@@ -301,6 +359,11 @@
         if (e.key === 'ArrowUp') picker.i = Math.max(0, picker.i - 1);
         else if (e.key === 'ArrowDown') picker.i = Math.min(picker.items.length - 1, picker.i + 1);
         else if (e.key === 'Enter' || e.key === 'Escape') { const p = picker; picker = null; p.done(e.key === 'Enter' ? p.items[p.i] : null); }
+      } else if (mode === 'read' && sizing) {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') setScale(prefs.scale - SCALE_STEP);
+        else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') setScale(prefs.scale + SCALE_STEP);
+        else if (e.key === 'Enter') endSizing(true);
+        else if (e.key === 'Escape') endSizing(false);
       } else if (mode === 'read') {
         if (menu) {
           if (e.key === 'ArrowUp') menu.i = Math.max(0, menu.i - 1);
@@ -339,15 +402,21 @@
 
   // Caroline's tools for this page (manifest: "caroline")
   Platform.tools.handle('open_book', async a => { if (mode === 'read') await closeBook(); await openBook(a.scope === 'mine' ? 'mine' : 'public', String(a.id)); return cur ? `open: ${cur.title}` : 'could not open the book'; });
+  Platform.tools.handle('bookmark_here', async () => { if (!cur) return 'no book is open'; if (marksHere().length) return 'this page already has a bookmark'; await toggleBookmark(); return `bookmarked: ${cur.title}, chapter ${ch + 1}`; });
   Platform.tools.handle('where_am_i', async () => cur ? `${cur.title} — ${cur.author}; chapter ${ch + 1} of ${cur.chapters.length} (${cur.chapters[ch].title}), ${Math.round(pct())}%` : 'no book is open');
   Platform.tools.handle('page_text', async () => cur ? [...$('cols').querySelectorAll('[data-b]')].filter(el => { const r = el.getClientRects()[0], b = $('cols').getBoundingClientRect().left; return r && r.left - b >= -2 && r.left - b < colsW(); }).map(el => el.textContent).join('\n') : 'no book is open');
 
   addEventListener('resize', () => { if (mode === 'read') layout(bl); });
 
   (async () => {
-    let p = await Platform.db.get('prefs').catch(() => null);
-    try { p = typeof p === 'string' ? JSON.parse(p) : p; } catch (e) { p = null; }
-    if (p && SIZES.includes(p.size)) prefs = {size: p.size, theme: p.theme === 'light' ? 'light' : 'dark'};
+    let st0 = await api('settings').catch(() => null);
+    let old = await Platform.db.get('prefs').catch(() => null);            // before 1.1 the font step and the theme lived only in this page's storage
+    try { old = typeof old === 'string' && old ? JSON.parse(old) : old; } catch (e) { old = null; }
+    if (old && old.size && st0 && st0.fontScale === 100) {
+      st0 = await api('settings', {fontScale: Math.round(old.size / BASE_PX * 10) * 10, theme: old.theme === 'light' ? 'light' : 'dark'}).catch(() => st0);
+      Platform.db.set('prefs', '').catch(() => {});
+    }
+    if (st0) prefs = {scale: Math.max(SCALE_MIN, Math.min(SCALE_MAX, st0.fontScale || 100)), theme: st0.theme === 'light' ? 'light' : 'dark'};
     const st = await Platform.state.get().catch(() => null);
     const arg = await Platform.launchArg().catch(() => null);
     if (st && TABS.includes(st.tab)) tab = st.tab;

@@ -31,7 +31,8 @@ delays it); what the site holds is pulled when a book is opened. A place or a bo
 block (a hint), the start of the paragraph's text (the real anchor) and the percent of the book (the last resort); see locate(). The book of the site is
 "<scope>:<file name>", the same on every client.
 
-The key of the site's pages (it is in every page of squirrelwisdom.com, not a secret of the account) is $INTELLICAT_BOOKS_KEY or "books_key" in ~/.intellicat/keys.json
+The key is the ONE app key of the site (the one in every page of squirrelwisdom.com, the same as notes_key; not a key per device, not a secret of the account; its grants on the site include
+user:getSessionUser and plugin:call for the plugin Books). It is $INTELLICAT_BOOKS_KEY or "books_key" in ~/.intellicat/keys.json
 ($INTELLICAT_KEYS); it is not in this repository. The address of the site is $INTELLICAT_SW_URL (the shell's setting; a test points it at a stand-in).
 """
 

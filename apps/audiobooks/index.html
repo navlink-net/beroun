@@ -1,0 +1,441 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Konstantin Khait, IT Partners Solutions. MIT License. -->
+<meta charset="utf-8">
+<title>Audiobooks</title>
+<meta name="viewport" content="width=640,height=480">
+<!--
+  Audiobooks: the audiobooks of squirrelwisdom.com (the public catalog and the owner's own), listened to on the device; abooksd (manifest: services) gives the list, the
+  addresses of the MP3 files and the place where the owner stopped. The page plays the files from the site (<audio>), it copies nothing.
+  The library: Left / Right change the tab (Listening, Public, My books), Up / Down choose, A opens (on the first row: search; on the "now playing" row: the player), B leaves
+  (the sound stops with the app; the place is saved).
+  The player shows every control on the screen: previous file, 30 s back, play / pause, 30 s forward, next file, speed, bookmark, the bookmarks, the files. Left / Right move
+  along them, A does the one in focus (the focus starts on play / pause), Up / Down are a quick previous / next file, B goes back to the library and the book goes on playing there.
+  Speed: A on the speed, then Left / Right change it in steps of 0.1 (0.5-3), A keeps it, B cancels. The star: A adds a bookmark at the second (or removes the one that is here).
+  The bookmarks are per book: A on one goes to it or deletes it. The place (file and second), the bookmarks and the speed are kept by abooksd on the device and on the site
+  (the account), so another device and the web player go on from the same second.
+  Only the cursor, A and B have a job.
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: "DejaVu Sans", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #tabs { flex: none; display: flex; background: #000; }
+  .tab { flex: 1; text-align: center; padding: 9px 0; font-size: 18px; color: #8a949e; border-bottom: 3px solid transparent; }
+  .tab.on { color: #f2a900; border-color: #f2a900; }
+  #list { flex: 1; min-height: 0; overflow: hidden; padding: 6px 10px; position: relative; }
+  .row { display: flex; align-items: center; gap: 10px; min-height: 50px; padding: 4px 10px; margin-bottom: 4px; border-radius: 6px; background: #1d242b; font-size: 19px; }
+  .row.sel { background: #f2a900; color: #000; }
+  .row .ic { flex: none; width: 22px; text-align: center; }
+  .row .x { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .row .x small { display: block; font-size: 13px; opacity: .65; overflow: hidden; text-overflow: ellipsis; }
+  .row .d { flex: none; font-size: 13px; opacity: .8; }
+  .row.act { background: #26303a; }
+  .row.act.sel { background: #f2a900; }
+  .row.now { background: #3a2a00; }
+  .row.now.sel { background: #f2a900; }
+  .empty { padding: 30px; text-align: center; color: #6c7780; font-size: 18px; }
+  #foot { flex: none; height: 24px; line-height: 24px; padding: 0 14px; background: #1d242b; color: #aab; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #msg { flex: none; display: none; padding: 6px 14px; background: #3a2a00; color: #f2a900; font-size: 15px; }
+  #ask { display: none; flex: none; padding: 8px 12px; background: #000; border-top: 2px solid #f2a900; }
+  #ask label { display: block; font-size: 14px; color: #8a949e; margin-bottom: 4px; }
+  #ask input { width: 100%; padding: 8px 10px; font-size: 20px; background: #1d242b; color: #fff; border: 1px solid #f2a900; border-radius: 5px; outline: 0; }
+  /* the player */
+  #player { display: none; flex: 1; min-height: 0; flex-direction: column; padding: 10px 20px; gap: 8px; position: relative; }
+  #top { flex: 1; min-height: 0; display: flex; gap: 18px; align-items: center; }
+  #cover { flex: none; width: 150px; height: 150px; border-radius: 10px; background: #1d242b center / cover no-repeat; display: flex; align-items: center; justify-content: center; font-size: 70px; color: #3a4650; }
+  #info { flex: 1; min-width: 0; }
+  #ptitle { font-size: 26px; line-height: 1.2; max-height: 3.6em; overflow: hidden; }
+  #pauthor { margin-top: 6px; font-size: 18px; color: #aab; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #pnarr { margin-top: 2px; font-size: 14px; color: #6c7780; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #pfile { margin-top: 14px; font-size: 18px; color: #f2a900; }
+  #pstate { margin-top: 6px; font-size: 30px; }
+  #bar { flex: none; height: 10px; border-radius: 5px; background: #26303a; overflow: hidden; }
+  #fill { height: 100%; width: 0; background: #f2a900; }
+  #times { flex: none; display: flex; justify-content: space-between; font-size: 18px; color: #aab; }
+  #strip { flex: none; display: flex; gap: 6px; }
+  .ctl { flex: 1; min-width: 0; text-align: center; padding: 6px 0 4px; border-radius: 8px; background: #1d242b; font-size: 22px; line-height: 1.1; }
+  .ctl small { display: block; margin-top: 3px; font-size: 11px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ctl.sel { background: #f2a900; color: #000; }
+  .ctl.on { color: #f2a900; }
+  .ctl.sel.on { color: #000; }
+</style>
+<div id="tabs"></div>
+<div id="list"></div>
+<div id="player">
+  <div id="top"><div id="cover">♫</div><div id="info"><div id="ptitle"></div><div id="pauthor"></div><div id="pnarr"></div><div id="pfile"></div><div id="pstate"></div></div></div>
+  <div id="bar"><div id="fill"></div></div>
+  <div id="times"><span id="tcur"></span><span id="tspeed"></span><span id="tend"></span></div>
+  <div id="strip"></div>
+</div>
+<div id="msg"></div>
+<div id="ask"><label id="askLabel"></label><input id="askIn" type="text" autocomplete="off"></div>
+<div id="foot"></div>
+<script src="/platform.js"></script>
+<script>
+  const API = '/api/app/audiobooks/';
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  const T = s => Platform.t(s);
+  const TABS = ['listening', 'public', 'mine'];
+  const SEEK_S = 30, NEAR_S = 4, SAVE_EVERY_S = 10, SPEED_STEP = 0.1, SPEED_MIN = 0.5, SPEED_MAX = 3;
+
+  let tab = 'public', filter = {q: '', language: ''}, books = [], langs = [];
+  let rows = [], sel = 0;
+  let mode = 'list';                       // list | play
+  let fi = 2;                              // the control in focus in the player (2: play / pause)
+  let marks = [];                          // the bookmarks of the open book
+  let picker = null;                       // {title, items: [{label, value}], i, done}
+  let ask = null;
+  let speed = 1;
+  let speedEdit = null;                    // {from}: Left / Right change the speed now
+  let cur = null;                          // the open book {scope, id, title, author, narrator, files: [name], base, cover}
+  let idx = 0;                             // the file being played
+  let lastSave = 0, pendingSeek = null;
+  const audio = new Audio();
+  audio.preload = 'auto';
+
+  async function api(path, body) {
+    const r = await fetch(API + path, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.kind = j.kind; throw e; }
+    return j;
+  }
+  function say(text) { const m = $('msg'); m.textContent = text || ''; m.style.display = text ? 'block' : 'none'; }
+  function flash(text) { say(text); setTimeout(() => say(''), 2000); }
+  function failText(e) {
+    return e.kind === 'network' ? T('No network')
+      : e.kind === 'signin' ? T('Sign in to the console to see your audiobooks')
+      : e.kind === 'config' ? T('Audiobooks are not set up') : (e.message || T('Something went wrong'));
+  }
+  const fmt = s => { s = Math.max(0, Math.floor(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s % 60).padStart(2, '0'); };
+
+  // A failure is told in the system MessageBox; on a poor link it offers another try. true: the owner wants to retry.
+  async function report(e, title) {
+    say('');
+    const net = e.kind === 'network';
+    const r = await Platform.messageBox(Object.assign({title: T(net ? 'No connection' : title), text: failText(e), icon: net ? 'warning' : 'error', timeout: 0},
+      net ? {buttons: ['Try again', 'Close'], default: 0} : {kind: 'ok'})).catch(() => null);
+    return !!(net && r && r.index === 0);
+  }
+
+  // ---- the library -------------------------------------------------------------------------------
+  async function load() {
+    say('');
+    try {
+      if (tab === 'listening') {
+        books = (await api('recent')).books;
+      } else {
+        const q = new URLSearchParams({scope: tab, q: filter.q, language: filter.language});
+        const r = await api('catalog?' + q);
+        books = r.books; langs = r.languages;
+        if (!r.signedIn) say(failText({kind: 'signin'}));
+        else if (r.stale) say(T('Offline: the list is from the last time'));
+      }
+    } catch (e) { books = []; say(failText(e)); if (e.kind === 'network' && await report(e, 'The list did not load')) return load(); }
+    rows = [];
+    if (cur) rows.push({kind: 'now'});
+    if (tab !== 'listening') {
+      rows.push({kind: 'search'});
+      if (langs.length > 1) rows.push({kind: 'lang'});
+    }
+    rows = rows.concat(books.map(b => ({kind: 'book', b})));
+    sel = Math.min(sel, Math.max(0, rows.length - 1));
+  }
+
+  function bookDetail(b) {
+    const l = b.listening || (b.time !== undefined ? {index: b.index, time: b.time} : null);
+    return l ? `${T('file')} ${l.index + 1}${b.files ? '/' + b.files : ''} · ${fmt(l.time)}` : (b.files ? b.files + ' ' + T('files') : '');
+  }
+
+  function draw() {
+    const playing = mode === 'play';
+    $('tabs').style.display = playing ? 'none' : 'flex';
+    $('list').style.display = playing ? 'none' : 'block';
+    $('player').style.display = playing ? 'flex' : 'none';
+    $('ask').style.display = ask ? 'block' : 'none';
+    if (!playing) {
+      $('tabs').innerHTML = TABS.map(t => `<div class="tab${t === tab ? ' on' : ''}">${T(t === 'listening' ? 'Listening' : t === 'public' ? 'Public' : 'My books')}</div>`).join('');
+      let h = rows.map((r, i) => {
+        const on = i === sel ? ' sel' : '';
+        if (r.kind === 'now') return `<div class="row now${on}"><span class="ic">${audio.paused ? '▮▮' : '▶'}</span><span class="x">${esc(cur.title)}<small>${T('file')} ${idx + 1}/${cur.files.length} · ${fmt(audio.currentTime)}</small></span></div>`;
+        if (r.kind === 'search') return `<div class="row act${on}"><span class="ic">?</span><span class="x">${filter.q ? esc(filter.q) + ' — ' + T('change the search') : T('Search by title, author or narrator')}</span></div>`;
+        if (r.kind === 'lang') return `<div class="row act${on}"><span class="ic">◐</span><span class="x">${T('Language')}: ${esc(filter.language || T('all'))}</span></div>`;
+        const b = r.b;
+        return `<div class="row${on}"><span class="ic">${b.listening || b.time !== undefined ? '●' : '○'}</span><span class="x">${esc(b.title)}<small>${esc(b.author)}${b.narrator ? ' · ' + esc(b.narrator) : ''}</small></span><span class="d">${esc(bookDetail(b))}</span></div>`;
+      }).join('');
+      if (!books.length) h += `<div class="empty">${tab === 'listening' ? T('Nothing listened to yet: pick a book in the Public tab') : T('No audiobooks')}</div>`;
+      if (picker) {
+        h = `<div class="empty" style="padding:6px">${esc(picker.title)}</div>` + picker.items.map((p, i) => `<div class="row${i === picker.i ? ' sel' : ''}"><span class="x">${esc(p.label)}</span></div>`).join('');
+      }
+      $('list').innerHTML = h;
+      const s = $('list').querySelector('.row.sel');
+      if (s) s.scrollIntoView({block: 'nearest'});
+    } else {
+      if (picker) {
+        $('top').style.display = 'none';
+        let m = $('pick'); if (!m) { m = Object.assign(document.createElement('div'), {id: 'pick'}); m.style.cssText = 'flex:1;min-height:0;overflow:hidden'; $('player').insertBefore(m, $('bar')); }
+        m.innerHTML = `<div class="empty" style="padding:4px">${esc(picker.title)}</div>` + picker.items.map((p, i) => `<div class="row${i === picker.i ? ' sel' : ''}"><span class="x">${esc(p.label)}</span></div>`).join('');
+        const s = m.querySelector('.row.sel'); if (s) s.scrollIntoView({block: 'nearest'});
+      } else {
+        $('top').style.display = 'flex';
+        if ($('pick')) $('pick').remove();
+        info();
+      }
+    }
+    $('foot').textContent = picker ? T('A: choose · B: cancel')
+      : playing ? (speedEdit ? T('Left/Right: speed · A: keep · B: cancel') : T('Left/Right: control · A: do · Up/Down: file · B: library'))
+      : T('A: open · Left/Right: tab · B: leave');
+  }
+
+  function info() {
+    if (!cur) return;
+    $('ptitle').textContent = cur.title;
+    $('pauthor').textContent = cur.author;
+    $('pnarr').textContent = cur.narrator ? T('Read by') + ' ' + cur.narrator : '';
+    $('pfile').textContent = `${T('File')} ${idx + 1} / ${cur.files.length}`;
+    $('pstate').textContent = audio.paused ? '▮▮' : '▶';
+    const c = $('cover');
+    if (cur.cover && c.dataset.src !== cur.cover) { c.dataset.src = cur.cover; c.style.backgroundImage = `url("${cur.site}${cur.cover}")`; c.textContent = ''; }
+    else if (!cur.cover) { c.style.backgroundImage = ''; c.dataset.src = ''; c.textContent = '♫'; }
+    tick(); strip();
+  }
+  function tick() {
+    const d = audio.duration && isFinite(audio.duration) ? audio.duration : 0;
+    $('tcur').textContent = fmt(audio.currentTime);
+    $('tend').textContent = d ? '-' + fmt(d - audio.currentTime) : '';
+    $('tspeed').textContent = speed.toFixed(1) + '×';
+    $('fill').style.width = d ? Math.min(100, audio.currentTime / d * 100) + '%' : '0';
+  }
+
+  // The controls of the player; fn is what A does.
+  function controls() {
+    const here = markHere();
+    return [
+      {ic: '|◀', t: T('File'), fn: () => stepFile(-1)},
+      {ic: '◀◀', t: '30 s', fn: () => seekBy(-SEEK_S)},
+      {ic: audio.paused ? '▶' : '▮▮', t: audio.paused ? T('Play') : T('Pause'), fn: toggle},
+      {ic: '▶▶', t: '30 s', fn: () => seekBy(SEEK_S)},
+      {ic: '▶|', t: T('File'), fn: () => stepFile(1)},
+      {ic: speed.toFixed(1) + '×', t: T('Speed'), fn: () => { speedEdit = {from: speed}; draw(); }},
+      {ic: here ? '★' : '☆', t: T('Bookmark'), on: !!here, fn: toggleMark},
+      {ic: '⚑', t: `${T('Marks')} ${marks.length}`, fn: markList},
+      {ic: '☰', t: T('Files'), fn: fileList}];
+  }
+  function strip() {
+    $('strip').innerHTML = controls().map((c, i) => `<div class="ctl${i === fi ? ' sel' : ''}${c.on ? ' on' : ''}">${c.ic}<small>${esc(c.t)}</small></div>`).join('');
+  }
+
+  // ---- bookmarks, files ---------------------------------------------------------------------------
+  const markHere = () => marks.find(m => m.index === idx && Math.abs(m.time - (audio.currentTime || 0)) < NEAR_S);
+  async function toggleMark() {
+    const here = markHere();
+    try {
+      if (here) marks = (await api('unbookmark', {scope: cur.scope, id: cur.id, bookmark_id: here.id})).bookmarks;
+      else marks = (await api('bookmark', {scope: cur.scope, id: cur.id, index: idx, time: audio.currentTime || 0})).bookmarks;
+    } catch (e) { if (e.message && /already has/.test(e.message)) return; throw e; }
+    strip();
+  }
+  async function markList() {
+    if (!marks.length) { flash(T('No bookmarks in this book')); return; }
+    const v = await choose(T('Bookmarks'), marks.map(m => ({label: `★ ${T('File')} ${m.index + 1} · ${fmt(m.time)}${m.label ? ' · ' + m.label : ''}`, value: m})));
+    if (!v) return;
+    const a = await choose(v.label, [{label: T('Go to the place'), value: 'go'}, {label: T('Delete the bookmark'), value: 'del'}]);
+    if (!a) return;
+    if (a.value === 'go') { loadFile(v.value.index, v.value.time, !audio.paused); saveSoon(); }
+    else marks = (await api('unbookmark', {scope: cur.scope, id: cur.id, bookmark_id: v.value.id})).bookmarks;
+  }
+  async function fileList() {
+    const v = await choose(T('Files'), cur.files.map((f, i) => ({label: `${i + 1}. ${f}`, value: i})), idx);
+    if (v) { loadFile(v.value, 0, !audio.paused); saveSoon(); }
+  }
+
+  // ---- asking for a line of text -----------------------------------------------------------------
+  function prompt(label, value) {
+    return new Promise(res => { ask = {done: res}; $('askLabel').textContent = label; $('askIn').value = value || ''; draw(); $('askIn').focus(); });
+  }
+  function closeAsk(v) { const a = ask; ask = null; $('askIn').blur(); draw(); a.done(v); }
+  $('askIn').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); closeAsk($('askIn').value.trim()); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAsk(null); }
+  });
+  function choose(title, items, start) { return new Promise(res => { picker = {title, items, i: start || 0, done: res}; draw(); }); }
+
+  // ---- the player --------------------------------------------------------------------------------
+  const urlOf = i => cur.site + cur.base + encodeURIComponent(cur.files[i]);
+
+  function saveNow() {
+    lastSave = Date.now();
+    if (!cur) return Promise.resolve();
+    return api('progress', {scope: cur.scope, id: cur.id, index: idx, time: pendingSeek !== null ? pendingSeek : (audio.currentTime || 0), speed}).catch(() => {});
+  }
+
+  // Puts file i in the player, at second t; play: start at once.
+  function loadFile(i, t, play) {
+    idx = Math.max(0, Math.min(cur.files.length - 1, i));
+    pendingSeek = t > 0 ? t : null;
+    audio.src = urlOf(idx);
+    audio.playbackRate = speed;
+    if (play) audio.play().catch(() => {});
+    draw();
+  }
+  audio.addEventListener('loadedmetadata', () => {
+    if (pendingSeek !== null) {
+      const t = pendingSeek; pendingSeek = null;
+      if (isFinite(audio.duration)) audio.currentTime = t < audio.duration - 2 ? t : 0;    // a file left at its very end starts again
+    }
+    audio.playbackRate = speed;
+    tick();
+  });
+  audio.addEventListener('timeupdate', () => {
+    if (mode === 'play' && !picker) { tick(); if (Math.floor(audio.currentTime) % 2 === 0) strip(); }
+    if (!audio.paused && Date.now() - lastSave > SAVE_EVERY_S * 1000) saveNow();
+  });
+  audio.addEventListener('play', () => { if (mode === 'play') info(); else if (mode === 'list') redraw(); });
+  audio.addEventListener('pause', () => { saveNow(); if (mode === 'play') info(); else redraw(); });
+  audio.addEventListener('ended', () => {
+    if (!cur) return;
+    if (idx < cur.files.length - 1) { loadFile(idx + 1, 0, true); saveSoon(); }
+    else { saveNow(); draw(); }
+  });
+  audio.addEventListener('error', () => { if (cur && audio.src) flash(T('The file does not play: check the network')); });
+  function saveSoon() { setTimeout(saveNow, 500); }
+  function redraw() { if (mode === 'list' && !picker && !ask) draw(); }
+  audio.addEventListener('seeked', () => { if (mode === 'play' && !picker) strip(); });
+
+  async function openBook(scope, id, play) {
+    say(T('Opening…'));
+    try {
+      const b = await api(`book?scope=${scope}&id=${encodeURIComponent(id)}`);
+      if (cur && (cur.scope !== scope || cur.id !== b.id)) { await saveNow(); audio.pause(); }
+      const same = cur && cur.scope === scope && cur.id === b.id;
+      cur = {scope, id: b.id, title: b.title, author: b.author, narrator: b.narrator, files: b.files, base: b.base, site: b.site, cover: b.cover};
+      speed = b.listening && b.listening.speed ? b.listening.speed : b.speed || 1;
+      marks = b.bookmarks || []; fi = 2;
+      mode = 'play'; say('');
+      if (!same) { const l = b.listening || {index: 0, time: 0}; loadFile(l.index, l.time, !!play); }
+      else { audio.playbackRate = speed; if (play) audio.play().catch(() => {}); }
+      draw();
+    } catch (e) { mode = 'list'; draw(); if (await report(e, 'The audiobook did not open')) return openBook(scope, id, play); }
+  }
+
+  async function toLibrary() {
+    await saveNow(); mode = 'list';
+    await load(); draw();
+  }
+
+  function seekBy(d) {
+    if (!cur || !isFinite(audio.duration)) return;
+    const t = audio.currentTime + d;
+    if (t < 0 && idx > 0) { loadFile(idx - 1, 0, !audio.paused); saveSoon(); return; }
+    if (t >= audio.duration && idx < cur.files.length - 1) { loadFile(idx + 1, 0, !audio.paused); saveSoon(); return; }
+    audio.currentTime = Math.max(0, Math.min(audio.duration, t));
+    tick(); saveSoon();
+  }
+  function toggle() { if (audio.paused) audio.play().catch(() => flash(T('The file does not play: check the network'))); else audio.pause(); }
+  function stepFile(d) {
+    const n = idx + d;
+    if (n < 0 || n >= cur.files.length) return;
+    loadFile(n, 0, !audio.paused); saveSoon();
+  }
+
+  function setSpeed(v) {
+    speed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, Math.round(v * 10) / 10));
+    audio.playbackRate = speed;
+    tick(); strip();
+  }
+  function endSpeed(keep) {
+    if (!keep) setSpeed(speedEdit.from);
+    speedEdit = null; api('settings', {speed}).catch(() => {}); saveNow(); draw();
+  }
+
+  // ---- keys --------------------------------------------------------------------------------------
+  async function activate(r) {
+    if (r.kind === 'now') { mode = 'play'; return; }
+    if (r.kind === 'book') return openBook(r.b.scope, r.b.id, true);
+    if (r.kind === 'search') {
+      const q = await prompt(T('Search by title, author or narrator'), filter.q);
+      if (q !== null) { filter.q = q; sel = 0; await load(); }
+    } else if (r.kind === 'lang') {
+      const all = [''].concat(langs);
+      filter.language = all[(all.indexOf(filter.language) + 1) % all.length]; await load();
+    }
+  }
+
+  async function leave() {
+    await saveNow();
+    audio.pause();
+    await Platform.state.set(cur ? {scope: cur.scope, id: cur.id} : {tab}).catch(() => {});
+    return Platform.exit();
+  }
+
+  addEventListener('keydown', async e => {
+    if (ask) return;
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape'].includes(e.key)) return;
+    e.preventDefault();
+    try {
+      if (picker) {
+        if (e.key === 'ArrowUp') picker.i = Math.max(0, picker.i - 1);
+        else if (e.key === 'ArrowDown') picker.i = Math.min(picker.items.length - 1, picker.i + 1);
+        else if (e.key === 'Enter' || e.key === 'Escape') { const p = picker; picker = null; p.done(e.key === 'Enter' ? p.items[p.i] : null); }
+      } else if (mode === 'play' && speedEdit) {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') setSpeed(speed - SPEED_STEP);
+        else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') setSpeed(speed + SPEED_STEP);
+        else if (e.key === 'Enter') endSpeed(true);
+        else if (e.key === 'Escape') endSpeed(false);
+      } else if (mode === 'play') {
+        const n = controls().length;
+        if (e.key === 'ArrowRight') fi = (fi + 1) % n;
+        else if (e.key === 'ArrowLeft') fi = (fi + n - 1) % n;
+        else if (e.key === 'ArrowDown') stepFile(1);
+        else if (e.key === 'ArrowUp') stepFile(-1);
+        else if (e.key === 'Enter') await controls()[fi].fn();
+        else if (e.key === 'Escape') return toLibrary();
+      } else {
+        if (e.key === 'ArrowUp') sel = Math.max(0, sel - 1);
+        else if (e.key === 'ArrowDown') sel = Math.min(rows.length - 1, sel + 1);
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          tab = TABS[(TABS.indexOf(tab) + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length]; sel = 0; filter = {q: '', language: ''}; await load();
+        } else if (e.key === 'Enter' && rows[sel]) await activate(rows[sel]);
+        else if (e.key === 'Escape') return leave();
+      }
+    } catch (err) { console.error(err); report(err, 'Something went wrong'); }
+    draw();
+  });
+
+  $('list').addEventListener('click', async e => {
+    const el = e.target.closest('.row'); if (!el || picker || mode !== 'list') return;
+    const i = [...$('list').querySelectorAll('.row')].indexOf(el);
+    if (i < 0 || !rows[i]) return;
+    sel = i; draw(); await activate(rows[i]).catch(err => report(err, 'Something went wrong')); draw();
+  });
+
+  Platform.onClose(async () => {
+    await saveNow();
+    audio.pause();
+    await Platform.state.set(cur ? {scope: cur.scope, id: cur.id} : {tab}).catch(() => {});
+  });
+
+  // Caroline's tools for this page (manifest: "caroline")
+  const nowText = () => cur ? `${cur.title} — ${cur.author}; file ${idx + 1} of ${cur.files.length}, ${fmt(audio.currentTime)}${isFinite(audio.duration) ? ' of ' + fmt(audio.duration) : ''}, ${audio.paused ? 'paused' : 'playing'}, speed ${speed.toFixed(1)}` : 'no audiobook is open';
+  Platform.tools.handle('play_audiobook', async a => { await openBook(a.scope === 'mine' ? 'mine' : 'public', String(a.id), true); return nowText(); });
+  Platform.tools.handle('pause', async () => { audio.pause(); return nowText(); });
+  Platform.tools.handle('resume', async () => { if (cur) await audio.play().catch(() => {}); return nowText(); });
+  Platform.tools.handle('seek', async a => { seekBy(Number(a.seconds) || 0); return nowText(); });
+  Platform.tools.handle('bookmark_here', async () => { if (!cur) return 'no audiobook is open'; if (markHere()) return 'there is a bookmark here already'; await toggleMark(); return `bookmarked: ${cur.title}, file ${idx + 1}, ${fmt(audio.currentTime)}`; });
+  Platform.tools.handle('next_file', async () => { if (cur) stepFile(1); return nowText(); });
+  Platform.tools.handle('now_playing', async () => nowText());
+
+  (async () => {
+    const st0 = await api('settings').catch(() => null);
+    if (st0 && st0.speed) speed = st0.speed;
+    const st = await Platform.state.get().catch(() => null);
+    const arg = await Platform.launchArg().catch(() => null);
+    if (st && TABS.includes(st.tab)) tab = st.tab;
+    else { const rc = await api('recent').catch(() => ({books: []})); if (rc.books.length) tab = 'listening'; }
+    await load(); draw();
+    if (arg && arg.id) await openBook(arg.scope === 'mine' ? 'mine' : 'public', String(arg.id), true);
+    else if (st && st.id) await openBook(st.scope === 'mine' ? 'mine' : 'public', String(st.id), false);
+  })();
+
+  addEventListener('osk', () => {});
+</script>

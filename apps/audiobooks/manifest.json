@@ -1,0 +1,43 @@
+{
+  "format": 1,
+  "id": "audiobooks",
+  "name": "Audiobooks",
+  "version": "1.0.0",
+  "permissions": ["account.session", "caroline.ask"],
+  "icon": "icon.svg",
+  "frontend": {"entry": "index.html", "window": "shared"},
+  "state": true,
+  "tile": {"order": 23},
+  "capabilities": [{"name": "Network"}],
+  "services": [
+    {"id": "abooksd", "name": "Audiobooks of the account: list and listening place", "host": "process", "cmd": ["python3", "{app}/abooksd.py", "{port}"], "port": 48807,
+     "start": "open", "required_by": ["audiobooks"], "priority": 50, "memory_mb": 40}
+  ],
+  "endpoints": [
+    {"path": "catalog", "methods": ["GET"], "service": "abooksd"},
+    {"path": "recent", "methods": ["GET"], "service": "abooksd"},
+    {"path": "book", "methods": ["GET"], "service": "abooksd"},
+    {"path": "status", "methods": ["GET"], "service": "abooksd"},
+    {"path": "progress", "methods": ["POST"], "service": "abooksd"},
+    {"path": "bookmarks", "methods": ["GET"], "service": "abooksd"},
+    {"path": "bookmark", "methods": ["POST"], "service": "abooksd"},
+    {"path": "unbookmark", "methods": ["POST"], "service": "abooksd"},
+    {"path": "settings", "methods": ["GET", "POST"], "service": "abooksd"}
+  ],
+  "caroline": {
+    "description": "The audiobooks of SquirrelWisdom (the public catalog and the owner's own, MP3): find a book, know and set where the owner stopped (the file and the second, the same on every device and on the web), bookmarks, the playback speed, and play, pause and seek on the screen",
+    "skills": ["skills"],
+    "mcp": [
+      {"id": "audiobooks", "transport": "stdio", "cmd": ["python3", "{app}/abooks_mcp.py", "{port}"], "service": "abooksd"}
+    ],
+    "tools": [
+      {"name": "play_audiobook", "description": "Opens an audiobook and plays it from the place where the owner stopped", "input": {"id": "string", "scope": "string"}},
+      {"name": "pause", "description": "Pauses the audiobook", "input": {}},
+      {"name": "resume", "description": "Goes on playing the open audiobook", "input": {}},
+      {"name": "seek", "description": "Moves within the file by this many seconds (negative: back)", "input": {"seconds": "number"}},
+      {"name": "bookmark_here", "description": "Adds a bookmark at the place the owner is listening to now (or tells that it has one)", "input": {}},
+      {"name": "next_file", "description": "Goes to the next file of the audiobook", "input": {}},
+      {"name": "now_playing", "description": "Which audiobook is open, the file, the time and whether it plays", "input": {}}
+    ]
+  }
+}

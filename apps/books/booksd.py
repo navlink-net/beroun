@@ -224,6 +224,7 @@ SYNC_BACKOFF_S = float(os.environ.get("BOOKS_SYNC_BACKOFF_S") or 60)       # aft
 REJECT_BACKOFF_S = float(os.environ.get("BOOKS_REJECT_BACKOFF_S") or 300)
 MAX_TRIES = 20                                                              # a queued change the site keeps refusing is dropped after this many tries
 MAX_PENDING = 500
+FLUSH_EVERY_S = float(os.environ.get("BOOKS_FLUSH_EVERY_S") or 30)         # what the site has not got is offered again this often, with no new change needed
 FONT_MIN, FONT_MAX = 50, 300
 state.update(offline_until=0.0)
 plock = threading.Lock()          # pending.json
@@ -925,11 +926,19 @@ class H(BaseHTTPRequestHandler):
         self.route({"progress": op_progress, "bookmark": op_bookmark, "unbookmark": op_unbookmark, "settings": op_set_settings}, b)
 
 
+def flusher():
+    while True:
+        time.sleep(FLUSH_EVERY_S)
+        if load_json("pending.json", []):
+            flush()
+
+
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("INTELLICAT_SERVICE_PORT", "48805"))
     os.makedirs(DATA, exist_ok=True)
     log("booksd on", port)
     kick()                                  # what an earlier run could not send
+    threading.Thread(target=flusher, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 
 
